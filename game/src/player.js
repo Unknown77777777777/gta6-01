@@ -27,9 +27,21 @@ export function createPlayer(x, y) {
     muzzle: 0, // frames of muzzle flash left to draw
     hurtTimer: 0, // brief invulnerability after a hard hit
     bustedTimer: 0, // seconds a cop car has sat on top of her while wanted
+    kx: 0, ky: 0, // knockback velocity: a shove from a bumper decays fast
     moving: false,
     running: false,
   };
+}
+
+/**
+ * Shove Lena on foot: a cop's bumper or a clipped car sends her stumbling
+ * in (dx, dy) with `force` speed. The shove decays over a fraction of a
+ * second, so it reads as a hit, not a slide.
+ */
+export function knockPlayer(player, dx, dy, force) {
+  const len = Math.hypot(dx, dy) || 1;
+  player.kx = (dx / len) * force;
+  player.ky = (dy / len) * force;
 }
 
 /**
@@ -41,6 +53,14 @@ export function updatePlayerOnFoot(player, move, run, dt, city) {
   const len = Math.hypot(move.x, move.y);
   player.moving = len > 0.05;
   player.running = run && player.moving;
+  // Knockback rides along with her own movement and decays fast.
+  if (Math.abs(player.kx) > 1 || Math.abs(player.ky) > 1) {
+    player.x += player.kx * dt;
+    player.y += player.ky * dt;
+    player.kx *= Math.max(0, 1 - dt * 6);
+    player.ky *= Math.max(0, 1 - dt * 6);
+    resolveCircle(city, player, PLAYER_RADIUS);
+  }
   if (player.moving) {
     const nx = move.x / (len || 1);
     const ny = move.y / (len || 1);
@@ -77,6 +97,11 @@ export function playerPunch(player) {
   return true;
 }
 
+/** Reload the pistol: a fresh magazine of 12 after the reload delay. */
+export function reloadWeapon(player) {
+  player.ammo = 12;
+}
+
 /** Aim at the mouse (world coordinates) and fire the pistol when it is ready. */
 export function playerShoot(player, targetX, targetY) {
   if (!player.onFoot || player.fireTimer > 0 || player.ammo <= 0) return null;
@@ -108,4 +133,23 @@ export function hurtPlayer(player, amount) {
 /** Heal Lena back up (hospital respawn, mission rewards). */
 export function healPlayer(player, amount) {
   player.health = clamp(player.health + amount, 0, MAX_HEALTH);
+}
+
+/** Reset every per-life timer after a wasted/busted respawn, so no stale
+ * punch, fire, hurt or busted timer leaks into the retried mission. */
+export function resetPlayerTimers(player) {
+  player.punchTimer = 0;
+  player.fireTimer = 0;
+  player.muzzle = 0;
+  player.hurtTimer = 0;
+  player.bustedTimer = 0;
+  player.kx = 0;
+  player.ky = 0;
+  player.moving = false;
+  player.running = false;
+}
+
+/** True while Lena is aiming her pistol (muzzle flash still showing). */
+export function playerIsAiming(player) {
+  return player.muzzle > 0;
 }

@@ -20,12 +20,27 @@ export function createPed(rng, x, y) {
     shirt: SHIRTS[Math.floor(rng() * SHIRTS.length)],
     skin: SKINS[Math.floor(rng() * SKINS.length)],
     walkPhase: rng() * Math.PI * 2,
+    // Gait variation: a personal pace (0.8..1.3) and stride so the crowd does
+    // not march in lockstep; the renderer bobs each walker by its own pace.
+    pace: 0.8 + rng() * 0.5,
+    stride: 1.2 + rng() * 1.1,
     // Sidewalk strolling: a target point to walk toward, re-picked on arrival.
     tx: x, ty: y,
     flee: 0, // seconds of panic left
     down: 0, // seconds lying down after being hit
     dead: false,
+    waiting: false, // a taxi fare: stands still and waves, never strolls
   };
+}
+
+/** A fare waiting for a taxi: stands at the stand and waves, never strolls. */
+export function createWaitingPed(x, y) {
+  const ped = createPed(Math.random, x, y);
+  ped.waiting = true;
+  ped.tx = x;
+  ped.ty = y;
+  ped.angle = -Math.PI / 2;
+  return ped;
 }
 
 /** A crowd spread over the sidewalks near the city centre and the beachfront. */
@@ -35,9 +50,10 @@ export function spawnPedestrians(rng, count) {
     let x;
     let y;
     if (rng() < 0.25) {
-      // Beachfront strollers.
+      // Beachfront strollers — on the sand (y 3150+), not on the asphalt edge
+      // of the southern road, so a car on road 3000 never clips them.
       x = 300 + rng() * 4200;
-      y = 3050 + rng() * 250;
+      y = 3150 + rng() * 200;
     } else {
       const road = ROAD_V[Math.floor(rng() * ROAD_V.length)];
       const along = 200 + rng() * 2900;
@@ -58,8 +74,15 @@ export function spawnPedestrians(rng, count) {
 
 /** Pick a new stroll target: a nearby point on a sidewalk along the same road. */
 export function pickStrollTarget(ped, rng) {
-  const near = nearestRoadPoint(ped.x, ped.y);
   const along = (rng() - 0.5) * 700;
+  // Beach walkers stay on the sand: their stroll runs east-west along the
+  // beach, never back up onto the southern road's sidewalk.
+  if (ped.y > 3100) {
+    ped.tx = clamp(ped.x + along, 150, 4650);
+    ped.ty = clamp(ped.y + (rng() - 0.5) * 200, 3120, 3380);
+    return;
+  }
+  const near = nearestRoadPoint(ped.x, ped.y);
   if (!near) {
     ped.tx = ped.x + along;
     ped.ty = ped.y;
@@ -83,7 +106,7 @@ export function updatePed(ped, dt, city, rng, danger) {
     ped.down -= dt;
     return;
   }
-  ped.walkPhase += dt * (ped.flee > 0 ? 14 : 7);
+  ped.walkPhase += dt * (ped.flee > 0 ? 14 : 7) * (ped.pace || 1);
   if (danger && dist(ped.x, ped.y, danger.x, danger.y) < danger.r) {
     ped.flee = 2.5;
   }
@@ -96,6 +119,8 @@ export function updatePed(ped, dt, city, rng, danger) {
     resolveCircle(city, ped, PED_RADIUS);
     return;
   }
+  // A fare waits at the stand and waves: no strolling, no wandering off.
+  if (ped.waiting) return;
   const dx = ped.tx - ped.x;
   const dy = ped.ty - ped.y;
   const d = Math.hypot(dx, dy);

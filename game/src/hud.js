@@ -2,8 +2,19 @@
 // its timer, plus the minimap — a small live canvas of the whole city with Lena,
 // her car, the police, traffic and the mission marker on it.
 
-import { WORLD_H, WORLD_W } from './city.js';
-import { DEBT_TOTAL, currentMission, currentObjective, missionTarget, moneyEarned } from './missions.js';
+import { WORLD_H, WORLD_W, districtAt } from './city.js';
+import { missionTarget, missionTargetFor, missionSummary, debtProgress } from './missions.js';
+import { hideoutProgress, heatLevelName } from './wanted.js';
+import { sideStatusText, sideMarkers } from './side.js';
+
+/** Write text only when it changed: updateHud runs every frame, and a
+ * redundant textContent write is work the browser does not need to redo. */
+function setText(el, value) {
+  if (el._last !== value) {
+    el._last = value;
+    el.textContent = value;
+  }
+}
 
 /** The HUD's DOM nodes, looked up once. */
 export function createHud() {
@@ -12,6 +23,7 @@ export function createHud() {
   return {
     money: el('hud-money'),
     debt: el('hud-debt'),
+    debtFill: el('hud-debt-fill'),
     stars: el('hud-stars'),
     healthFill: el('hud-health-fill'),
     healthText: el('hud-health-text'),
@@ -20,6 +32,10 @@ export function createHud() {
     timer: el('hud-timer'),
     ammo: el('hud-ammo'),
     banner: el('hud-banner'),
+    radio: el('hud-radio'),
+    side: el('hud-side'),
+    district: el('hud-district'),
+    fps: el('hud-fps'),
     minimap,
     mapCtx: minimap ? minimap.getContext('2d') : null,
   };
@@ -34,33 +50,67 @@ function starRow(level) {
 /** Refresh the text HUD. Called every frame; cheap string writes only. */
 export function updateHud(hud, game) {
   const player = game.player;
-  hud.money.textContent = `$${game.money}`;
-  const debtLeft = Math.max(0, DEBT_TOTAL - moneyEarned(game.missions) - (game.missions.done ? 0 : 0));
-  hud.debt.textContent = game.missions.done ? 'DEBT PAID ✓' : `DEBT $${debtLeft} TO MARCO VENN`;
-  hud.stars.textContent = starRow(game.wanted.level);
+  setText(hud.money, `$${game.money}`);
+  const debt = debtProgress(game.missions);
+  setText(hud.debt, game.missions.done ? 'DEBT PAID ✓' : `DEBT $${debt.left} TO MARCO VENN · ${debt.pct}%`);
+  if (hud.debtFill) hud.debtFill.style.width = `${game.missions.done ? 100 : debt.pct}%`;
+  setText(hud.stars, starRow(game.wanted.level));
   hud.stars.className = game.wanted.level > 0 ? 'stars hot' : 'stars';
+  hud.stars.title = heatLevelName(game.wanted.level);
   const hp = Math.max(0, Math.round(player.health));
   hud.healthFill.style.width = `${hp}%`;
   hud.healthFill.className = hp > 50 ? 'fill good' : hp > 25 ? 'fill warn' : 'fill bad';
-  hud.healthText.textContent = `${hp}`;
+  setText(hud.healthText, `${hp}`);
   const speedKmh = player.car ? Math.round(Math.abs(player.car.speed) * 0.24) : 0;
-  hud.speed.textContent = player.car ? `${speedKmh} km/h` : '';
-  const obj = currentObjective(game.missions);
-  const mission = currentMission(game.missions);
+  setText(hud.speed, player.car ? `${speedKmh} km/h` : '');
+  const summary = missionSummary(game.missions);
   if (game.missions.done) {
-    hud.objective.textContent = 'Debt paid. Costa Sol is yours — free roam!';
-  } else if (mission && obj) {
-    hud.objective.textContent = `${mission.title} — ${obj.text}`;
+    setText(hud.objective, 'Debt paid. Costa Sol is yours — free roam!');
+  } else if (summary) {
+    // GPS distance to the objective, live in the panel: the player reads the
+    // direction from the arrow and the metres from here, in one glance.
+    const target = missionTargetFor(game.missions, game);
+    let distText = '';
+    if (target) {
+      const px = player.car ? player.car.x : player.x;
+      const py = player.car ? player.car.y : player.y;
+      const d = Math.round(Math.hypot(target.x - px, target.y - py));
+      distText = ` · ${d}m`;
+    }
+    const hide = summary.type === 'escape' && game.wanted.level > 0 && hideoutProgress(game.wanted) > 0
+      ? ` · hiding ${Math.round(hideoutProgress(game.wanted) * 100)}%` : '';
+    setText(hud.objective, `${summary.title} — ${summary.text}${distText}${hide}`);
   } else {
-    hud.objective.textContent = '';
+    setText(hud.objective, '');
   }
-  hud.timer.textContent = game.missions.timer > 0 ? `⏱ ${Math.ceil(game.missions.timer)}s` : '';
-  hud.ammo.textContent = player.onFoot ? `🔫 ${player.ammo}` : '';
+  setText(hud.timer, game.missions.timer > 0 ? `⏱ ${Math.ceil(game.missions.timer)}s` : '');
+  setText(hud.ammo, player.onFoot ? `🔫 ${player.ammo}` : '');
   if (game.missions.banner > 0 && game.missions.justCompleted) {
     hud.banner.textContent = `✓ ${game.missions.justCompleted.title} complete — +$${game.missions.justCompleted.reward}`;
     hud.banner.classList.add('show');
   } else {
     hud.banner.classList.remove('show');
+  }
+  // Radio banner: station name for 2.5 s after entering a car or switching.
+  if (hud.radio) {
+    if (game.radioBanner > 0 && game.radioName) {
+      hud.radio.textContent = game.radioBlurb ? `♪ ${game.radioName} — ${game.radioBlurb}` : `♪ ${game.radioName}`;
+      hud.radio.classList.add('show');
+    } else {
+      hud.radio.classList.remove('show');
+    }
+  }
+  // Side-work line: packages found, taxi fares, jumps — and the live FPS,
+  // so the frame rate is always visible, not a number in a log.
+  if (hud.side && game.side) setText(hud.side, sideStatusText(game.side));
+  if (hud.district) {
+    const px = player.car ? player.car.x : player.x;
+    const py = player.car ? player.car.y : player.y;
+    setText(hud.district, `◈ ${districtAt(px, py).toUpperCase()}`);
+  }
+  if (hud.fps && game.fps) {
+    setText(hud.fps, `${game.fps} FPS`);
+    hud.fps.className = game.fps >= 50 ? 'good' : game.fps >= 30 ? 'warn' : 'bad';
   }
 }
 
@@ -121,6 +171,21 @@ export function drawMinimap(hud, game) {
     ctx.beginPath();
     ctx.arc(X(target.x), Y(target.y), pulse, 0, Math.PI * 2);
     ctx.fill();
+  }
+  // Side-work markers: hidden packages in gold, a waiting fare or drop-off
+  // in green, so the extra jobs are findable from the map alone.
+  if (game.side) {
+    for (const m of sideMarkers(game.side)) {
+      if (m.kind === 'package') {
+        ctx.fillStyle = '#ffd23c';
+        ctx.fillRect(X(m.x) - 1.5, Y(m.y) - 1.5, 3, 3);
+      } else if (m.kind === 'taxi-wait' || m.kind === 'taxi-drop') {
+        ctx.fillStyle = '#50dc78';
+        ctx.beginPath();
+        ctx.arc(X(m.x), Y(m.y), 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
   // Lena: white dot with a dark ring, or her car in gold.
   const px = game.player.car ? game.player.car.x : game.player.x;

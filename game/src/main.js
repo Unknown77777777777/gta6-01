@@ -3,16 +3,22 @@
 // story complete. ?shot=cover|driving|mission|foot (with &seed=N) stages that
 // scene instead of running the loop, paints it twice and sets window.__shotReady.
 
-import { createCity, clamp, dist, randomRoadPoint, WORLD_H, WORLD_W } from './city.js';
-import { createPlayer, updatePlayerOnFoot, playerPunch, playerShoot, hurtPlayer, healPlayer, MAX_HEALTH, PUNCH_RANGE, PUNCH_DAMAGE } from './player.js';
-import { createCar, driveCar, updateTrafficCar, updatePoliceCar, separateCars, spawnTraffic, spawnParkedCars, spawnPoliceCar, CAR_RADIUS } from './vehicles.js';
+import { createCity, clamp, dist, isWaterAt, randomRoadPoint, WORLD_H, WORLD_W } from './city.js';
+import { createPlayer, updatePlayerOnFoot, playerPunch, playerShoot, hurtPlayer, healPlayer, resetPlayerTimers, knockPlayer, reloadWeapon, MAX_HEALTH, PUNCH_RANGE, PUNCH_DAMAGE } from './player.js';
+import { createCar, driveCar, updateTrafficCar, updatePoliceCar, separateCars, spawnTraffic, spawnParkedCars, spawnPoliceCar, createTaxi, CAR_RADIUS } from './vehicles.js';
 import { spawnPedestrians, updatePed, knockPedDown, scarePeds } from './pedestrians.js';
-import { createMissionState, startMission, updateMission, currentMission, currentObjective, MISSIONS, DEBT_TOTAL } from './missions.js';
-import { createWanted, addWanted, setWanted, clearWanted, policeTargetCount, updateWanted } from './wanted.js';
+import { createMissionState, startMission, updateMission, currentMission, currentObjective, missionTargetFor, resetMissionClean, nextMissionPreview, MISSIONS, DEBT_TOTAL } from './missions.js';
+import { createWanted, addWanted, setWanted, clearWanted, policeTargetCount, policeSpawnInterval, updateWanted } from './wanted.js';
 import { createHud, updateHud, drawMinimap } from './hud.js';
 import { createAudio } from './audio.js';
-import { saveGame, loadSave, hasSave, clearSave } from './save.js';
+import { saveGame, loadSave, hasSave, clearSave, saveSummary } from './save.js';
 import { createRenderer } from './render.js';
+import { createParticlePool, spawnBurst, spawnParticle, spawnSmoke, updateParticles } from './particles.js';
+import {
+  createSideState, updateSide, tryBoardTaxi, taxiArrived, collectPackageAt,
+  checkJump, sideSaveData, applySideSave, sideTotals, PACKAGE_REWARD, JUMP_REWARD,
+} from './side.js';
+import { createWaitingPed } from './pedestrians.js';
 
 const STEP = 1 / 60;
 const MAX_FRAME = 0.25;
@@ -50,6 +56,13 @@ function createGame() {
   const target = createCar(2600, 1000, Math.PI / 2, 'target', rng);
   target.color = '#2fa8a0';
   parked.push(target);
+  // A guaranteed ride near Lena's spawn: mission 1 needs wheels, and a random
+  // parked-car roll must never leave her walking the whole map on foot.
+  const starter = createCar(3850, 2960, 0, 'parked', rng);
+  parked.push(starter);
+  // A guaranteed yellow cab one street over: the taxi side work is open
+  // from the first minute, not something she has to hunt for.
+  parked.push(createTaxi(3700, 2960, 0, rng));
   const game = {
     city, player,
     cars: cars.concat(parked),
@@ -57,8 +70,18 @@ function createGame() {
     police: [],
     peds: spawnPedestrians(rng, PED_COUNT),
     bullets: [],
-    particles: [],
+    // Particles live in one pre-allocated pool (no per-frame allocation),
+    // and the side activities (taxi fares, hidden packages, stunt jumps)
+    // keep their own state beside the missions.
+    particles: createParticlePool(320),
+    side: createSideState(city),
+    farePed: null, // the pedestrian waiting for a taxi, when one is out
     tireMarks: [],
+    floatTexts: [],
+    radioStation: 0,
+    radioBanner: 0,
+    radioName: '',
+    radioBlurb: '',
     missions: createMissionState(),
     wanted: createWanted(),
     money: 40,
@@ -70,12 +93,45 @@ function createGame() {
     stolenTarget: false, robbed: false,
     policeTimer: 0, trafficTimer: 0, crimeCooldown: 0, carCrashCooldown: 0,
     elapsed: 0, savedMoney: 0,
+    // Frame-rate readout: frames counted over each half second, smoothed.
+    fps: 0, fpsFrames: 0, fpsTime: 0,
   };
   startMission(game.missions, 0);
   return game;
 }
 
 const game = createGame();
+
+/** Floating combat/economy popup at a world position (renderer draws it). */
+function addFloatText(x, y, text, color, size) {
+  game.floatTexts.push({ x, y, text, color, size: size || 18, life: 1.4, maxLife: 1.4 });
+  if (game.floatTexts.length > 24) game.floatTexts.shift();
+}
+
+/**
+ * Anti soft-lock: the teal coupe mission 2 needs must always exist and be
+ * stealable. If it was wrecked, driven off in a respawn, or otherwise lost,
+ * a fresh coupe appears at its west-park spot.
+ */
+function ensureTargetCar() {
+  const t = game.targetCar;
+  const inWorld = t && !t.dead && (game.cars.includes(t) || game.player.car === t);
+  if (inWorld) return;
+  const fresh = createCar(2600, 1000, Math.PI / 2, 'target', rng);
+  fresh.color = '#2fa8a0';
+  game.targetCar = fresh;
+  game.cars.push(fresh);
+}
+
+/** Anti soft-lock: guarantee a drivable parked car within 500 px of (x, y). */
+function ensureCarNear(x, y) {
+  for (const car of game.cars) {
+    if (!car.dead && car.kind !== 'police' && dist(car.x, car.y, x, y) < 500) return;
+  }
+  if (game.player.car && dist(game.player.car.x, game.player.car.y, x, y) < 500) return;
+  const near = createCar(x + 120, y, 0, 'parked', rng);
+  game.cars.push(near);
+}
 
 // ---------------------------------------------------------------- input
 
@@ -108,7 +164,19 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.code === 'KeyF') tryPunch();
   if (event.code === 'KeyM') toggleMute();
-  if (event.code === 'KeyR') reloadTimer = 0.8;
+  if (event.code === 'KeyR') {
+    if (game.screen === 'play' && !game.player.onFoot && game.player.car) {
+      // In a car, R switches the radio station (on foot it reloads).
+      audio.ensure();
+      game.radioName = audio.radioCycle();
+      game.radioBlurb = audio.radioBlurb();
+      game.radioStation = audio.radioStation();
+      game.radioBanner = 2.5;
+      audio.click();
+    } else {
+      reloadTimer = 0.8;
+    }
+  }
   if (event.code === 'KeyP' || event.code === 'Escape') togglePause();
   if (event.code === 'Space' || event.code === 'Enter') {
     if (game.screen === 'title') startNewGame(false);
@@ -189,6 +257,9 @@ function startNewGame(continueSave) {
       game.player.x = save.x;
       game.player.y = save.y;
       game.player.health = save.health;
+      if (Array.isArray(save.completedIds)) game.missions.completedIds = [...save.completedIds];
+      if (typeof save.radioStation === 'number') game.radioStation = save.radioStation;
+      if (save.side) applySideSave(game.side, save.side);
       if (save.missionDone) {
         game.missions.done = true;
         game.missions.index = MISSIONS.length;
@@ -236,24 +307,49 @@ function endGame(reason) {
   audio.fail();
   audio.stopEngine();
   audio.stopSiren();
+  audio.radioStop();
   announce(reason === 'busted' ? 'Busted.' : 'Wasted.');
 }
 
 function respawn() {
   const lost = Math.floor(game.money * 0.1);
   game.money -= lost;
+  // Return Lena's car to the world before clearing the pointer: otherwise a
+  // mission car she was driving vanishes and its objective can never finish.
+  if (game.player.car) {
+    game.cars.push(game.player.car);
+    game.player.car.speed = 0;
+  }
   game.player.x = game.city.hospitalSpawn.x;
   game.player.y = game.city.hospitalSpawn.y;
   game.player.health = MAX_HEALTH;
   game.player.onFoot = true;
   game.player.car = null;
   game.player.ammo = 12;
-  game.player.bustedTimer = 0;
+  resetPlayerTimers(game.player);
+  audio.radioStop();
+  game.radioBanner = 0;
+  // A fare does not survive a bust or a hospital trip: the passenger walks
+  // off and the next one shows up later.
+  if (game.side.taxi.phase !== 'idle') {
+    game.side.taxi.phase = 'idle';
+    game.side.taxi.waitTimer = 14;
+  }
+  removeFarePed();
   for (const cop of game.police) cop.dead = true;
   game.police = [];
   clearWanted(game.wanted);
-  const idx = game.missions.done ? MISSIONS.length - 1 : game.missions.index;
-  startMission(game.missions, Math.min(idx, MISSIONS.length - 1));
+  // Clean mission retry: no duplicated NPCs, cars or timers, and the mission
+  // car is back on the map if it was lost.
+  resetMissionClean(game.missions);
+  ensureTargetCar();
+  // The coupe must be stealable again after a bust: its takenByPlayer flag
+  // survives the respawn, so re-entering it never sets stolenTarget and the
+  // steal objective can never complete — a soft-lock for any player who gets
+  // busted mid-mission-2. Clear the flag and the stale stolen marker.
+  if (game.targetCar) game.targetCar.takenByPlayer = false;
+  game.stolenTarget = false;
+  ensureCarNear(game.player.x, game.player.y);
   showScreen('play');
   announce(`Back on your feet. Lost $${lost} to the hospital.`);
 }
@@ -285,7 +381,10 @@ function commitCrime(stars) {
   game.crimeCooldown = 1.5;
   const before = game.wanted.level;
   addWanted(game.wanted, stars);
-  if (game.wanted.level > before) audio.sting();
+  if (game.wanted.level > before) {
+    audio.sting();
+    addFloatText(game.player.x, game.player.y - 34, `WANTED ${'★'.repeat(game.wanted.level)}`, '#ff7070', 17);
+  }
 }
 
 function tryEnterCar() {
@@ -301,9 +400,19 @@ function tryEnterCar() {
   if (firstTheft) {
     car.takenByPlayer = true;
     if (wasTarget) game.stolenTarget = true;
+    // A theft earns a star only when a cop is close enough to witness it —
+    // an unwitnessed joyride is not a crime spree (v1 rule, kept).
+    const before = game.wanted.level;
     if (copNearby(600)) commitCrime(1);
+    if (game.wanted.level > before) addFloatText(car.x, car.y - 30, 'WANTED ★', '#ffd23c', 16);
     announce(wasTarget ? 'That is the coupe. Get it to Sol Garage.' : 'Car taken. Drive.');
   }
+  if (car.kind === 'taxi') announce('Taxi — fares pay cash. Look for the green TAXI pin.');
+  audio.ensure();
+  audio.radioStart(game.radioStation);
+  game.radioName = audio.radioStations()[game.radioStation] || 'COSTA SYNTHWAVE';
+  game.radioBlurb = audio.radioBlurb();
+  game.radioBanner = 2.5;
   audio.pickup();
   return true;
 }
@@ -319,6 +428,8 @@ function exitCar() {
   game.player.angle = car.angle;
   game.cars.push(car);
   car.speed = 0;
+  audio.radioStop();
+  game.radioBanner = 0;
 }
 
 function tryPunch() {
@@ -353,16 +464,146 @@ function tryShoot() {
 }
 
 function spawnParticles(x, y, color, count, speed) {
-  for (let i = 0; i < count; i += 1) {
-    const a = Math.random() * Math.PI * 2;
-    const s = speed * (0.4 + Math.random() * 0.6);
-    game.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5, maxLife: 0.5, size: 2 + Math.random() * 3, color });
+  // One pooled burst: no object is allocated per particle any more.
+  spawnBurst(game.particles, x, y, color, count, speed, 0.5, 2.5, 0);
+}
+
+/**
+ * Step the bullets: each one flies, and dies when its life runs out, when it
+ * leaves the map, when it drops a pedestrian, or when it punches a car.
+ * Shooting a cop — or shooting where one can see — is a crime, and a hit
+ * throws a few sparks so the shot reads. Returns nothing; bullets that die
+ * are spliced out of the game's list.
+ */
+function updateBullets(dt) {
+  for (let i = game.bullets.length - 1; i >= 0; i -= 1) {
+    const b = game.bullets[i];
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.life -= dt;
+    let dead = b.life <= 0;
+    if (!dead && (b.x < 0 || b.x > WORLD_W || b.y < 0 || b.y > WORLD_H)) dead = true;
+    if (!dead) {
+      for (const ped of game.peds) {
+        if (ped.down > 0) continue;
+        if (dist(b.x, b.y, ped.x, ped.y) < 14) {
+          knockPedDown(ped);
+          commitCrime(1);
+          scarePeds(game.peds, ped.x, ped.y, 300);
+          spawnParticles(b.x, b.y, '#c03030', 6, 90);
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (!dead) {
+      // A bullet checks cars in the car's own frame: along the body and
+      // across it, so a shot down the side of a long car still counts.
+      for (const car of game.cars) {
+        if (car.dead) continue;
+        if (bulletHitsCar(b, car)) {
+          dead = true;
+          break;
+        }
+      }
+      if (!dead) {
+        for (const cop of game.police) {
+          if (cop.dead) continue;
+          if (bulletHitsCar(b, cop)) {
+            dead = true;
+            break;
+          }
+        }
+      }
+    }
+    if (dead) game.bullets.splice(i, 1);
   }
+}
+
+/**
+ * One bullet against one car: true when it lands, and the hit itself is
+ * applied here (damage, the crime when it counts, the spark). The two car
+ * lists are walked separately so no throwaway array is allocated per shot.
+ */
+function bulletHitsCar(b, car) {
+  const dx = b.x - car.x;
+  const dy = b.y - car.y;
+  const along = dx * Math.cos(car.angle) + dy * Math.sin(car.angle);
+  const side = -dx * Math.sin(car.angle) + dy * Math.cos(car.angle);
+  if (Math.abs(along) >= 24 || Math.abs(side) >= 14) return false;
+  car.health -= b.damage;
+  if (car.kind === 'police') commitCrime(1);
+  else if (copNearby(700)) commitCrime(1);
+  spawnParticles(b.x, b.y, '#ffd23c', 5, 80);
+  return true;
+}
+
+/**
+ * Police contact, only while wanted: a stood-down cop is just traffic, and
+ * must not waste Lena on foot after the heat already cleared. On foot a
+ * cruiser nudges her (light damage, a shove on a fresh hit, and the arrest
+ * timer at two stars and up); in a car it rams her ride. Returns true when
+ * the contact ended the game (wasted or busted), so the step stops there.
+ */
+function updatePoliceContact(dt) {
+  const player = game.player;
+  for (const cop of game.police) {
+    if (game.wanted.level === 0) break;
+    if (cop.dead) continue;
+    const d = dist(cop.x, cop.y, player.x, player.y);
+    if (player.onFoot) {
+      if (d < 34) {
+        // A cruiser nudging Lena hurts, but lightly: repeated rams should end
+        // in an arrest (the 1.5 s busted timer), not in her dying on the spot.
+        // The shove lands only on a fresh hit (hurtTimer just set): shoving
+        // her every frame while a cruiser sits on her used to push her out
+        // of the QuickStop till zone faster than she could hold E.
+        if (hurtPlayer(player, 4)) {
+          endGame('wasted');
+          return true;
+        }
+        if (player.hurtTimer > 0.5) knockPlayer(player, player.x - cop.x, player.y - cop.y, 150);
+        renderer.addShake(0.5);
+        audio.crash();
+        if (game.wanted.level >= 2) {
+          player.bustedTimer += dt;
+          // Swarmed on foot, the arrest comes before the beating: a shorter
+          // fuse and a slow decay, so repeated contact ends in BUSTED (a
+          // clean mission retry) instead of death by bumper cars.
+          if (player.bustedTimer > 1.5) {
+            endGame('busted');
+            return true;
+          }
+        }
+      } else {
+        player.bustedTimer = Math.max(0, player.bustedTimer - dt * 0.5);
+      }
+    } else if (player.car && d < 46 && Math.abs(cop.speed) > 120 && cop.ramCooldown <= 0) {
+      cop.ramCooldown = 1.8;
+      if (hurtPlayer(player, 6)) {
+        endGame('wasted');
+        return true;
+      }
+      player.car.health -= 4;
+      renderer.addShake(0.55);
+      audio.crash();
+      spawnParticles(cop.x, cop.y, '#ffd23c', 8, 120);
+    }
+  }
+  return false;
 }
 
 function addTireMark(x1, y1, x2, y2) {
   game.tireMarks.push({ x1, y1, x2, y2, life: 1 });
   if (game.tireMarks.length > 140) game.tireMarks.shift();
+}
+
+/** Take the waiting fare pedestrian out of the crowd (boarded, or gave up). */
+function removeFarePed() {
+  if (!game.farePed) return;
+  const i = game.peds.indexOf(game.farePed);
+  if (i >= 0) game.peds.splice(i, 1);
+  game.farePed = null;
 }
 
 // ---------------------------------------------------------------- the step
@@ -375,11 +616,13 @@ function stepWorld(dt) {
   if (reloadTimer > 0) {
     reloadTimer -= dt;
     if (reloadTimer <= 0) {
-      player.ammo = 12;
+      reloadWeapon(player);
       audio.click();
     }
   }
   if (game.missions.banner > 0) game.missions.banner -= dt;
+  if (game.radioBanner > 0) game.radioBanner -= dt;
+  if (!player.onFoot && player.car) audio.radioTick();
 
   // --- input direction
   const mx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
@@ -402,8 +645,20 @@ function stepWorld(dt) {
     }
     if (!missionAction) {
       game.interactPressed = false;
-      if (player.onFoot) tryEnterCar();
-      else exitCar();
+      if (!player.onFoot) {
+        // A fare waiting by the road boards before E means "get out": pull
+        // up next to the green TAXI pin and the passenger climbs in.
+        const fare = tryBoardTaxi(game.side, game, player.x, player.y);
+        if (fare > 0) {
+          removeFarePed();
+          audio.taxiBlip();
+          announce(`Fare aboard — drop them off for $${fare}.`);
+        } else {
+          exitCar();
+        }
+      } else {
+        tryEnterCar();
+      }
     }
     // When it is a mission action, interactPressed stays set: updateMission
     // consumes it for the pickup.
@@ -428,62 +683,54 @@ function stepWorld(dt) {
     if (handbrake && Math.abs(car.speed) > 200) {
       addTireMark(px - Math.cos(car.angle) * 18, py - Math.sin(car.angle) * 18, car.x - Math.cos(car.angle) * 18, car.y - Math.sin(car.angle) * 18);
     }
+    // Sharp turn at speed leaves skid marks too, not just the handbrake.
+    if (Math.abs(steer) > 0.7 && Math.abs(car.speed) > 350) {
+      addTireMark(px - Math.cos(car.angle) * 18, py - Math.sin(car.angle) * 18, car.x - Math.cos(car.angle) * 18, car.y - Math.sin(car.angle) * 18);
+    }
+    // Damage smoke: white under 60% HP, black under 30% (pooled puffs).
+    if (car.health < 60 && Math.random() < 0.5) {
+      spawnSmoke(game.particles, car.x - Math.cos(car.angle) * 20, car.y - Math.sin(car.angle) * 20, 1, car.health < 30);
+    }
     if (car.smoke > 0.3 && Math.random() < 0.3) {
-      game.particles.push({ x: car.x - Math.cos(car.angle) * 20, y: car.y - Math.sin(car.angle) * 20, vx: -Math.cos(car.angle) * 20, vy: -30, life: 0.8, maxLife: 0.8, size: 5, color: '#888888' });
+      spawnSmoke(game.particles, car.x - Math.cos(car.angle) * 20, car.y - Math.sin(car.angle) * 20, 1, false);
     }
     if (car.dead) {
-      // The car gave up: Lena climbs out of the wreck.
-      spawnParticles(car.x, car.y, '#ff8030', 14, 160);
+      // The car gave up: a fireball, a shake, and Lena climbs out of the
+      // wreck hurt. If it was the mission coupe, a fresh one is parked back
+      // at the west park so the job can still be finished.
+      const wasTarget = car === game.targetCar;
+      spawnParticles(car.x, car.y, '#ff8030', 26, 220);
+      spawnParticles(car.x, car.y, '#ffd23c', 14, 160);
+      addFloatText(car.x, car.y - 40, 'CAR WRECKED!', '#ff8030', 20);
       audio.crash();
-      renderer.addShake(0.7);
+      renderer.addShake(0.9);
+      audio.radioStop();
+      game.radioBanner = 0;
+      player.health = Math.max(1, player.health - 20);
       player.car = null;
       player.onFoot = true;
-      player.x = car.x + 40;
-      player.y = car.y;
+      // Eject onto dry land: a wreck at the harbour edge must not drop Lena
+      // into the water, where the no-swimming rule would freeze her in place
+      // while the police close in.
+      let ex = car.x + 40;
+      let ey = car.y;
+      if (isWaterAt(game.city, ex, ey)) {
+        const options = [[car.x - 40, car.y], [car.x, car.y - 40], [car.x, car.y + 40], [car.x, car.y]];
+        for (const [ox, oy] of options) {
+          if (!isWaterAt(game.city, ox, oy)) { ex = ox; ey = oy; break; }
+        }
+      }
+      player.x = ex;
+      player.y = ey;
       game.cars.push(car);
+      if (wasTarget) ensureTargetCar();
+      // A wreck must never strand Lena on foot in a chase: a ride nearby.
+      ensureCarNear(player.x, player.y);
     }
   }
 
-  // --- bullets
-  for (let i = game.bullets.length - 1; i >= 0; i -= 1) {
-    const b = game.bullets[i];
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
-    b.life -= dt;
-    let dead = b.life <= 0;
-    if (!dead && (b.x < 0 || b.x > WORLD_W || b.y < 0 || b.y > WORLD_H)) dead = true;
-    if (!dead) {
-      for (const ped of game.peds) {
-        if (ped.down > 0) continue;
-        if (dist(b.x, b.y, ped.x, ped.y) < 14) {
-          knockPedDown(ped);
-          commitCrime(1);
-          scarePeds(game.peds, ped.x, ped.y, 300);
-          spawnParticles(b.x, b.y, '#c03030', 6, 90);
-          dead = true;
-          break;
-        }
-      }
-    }
-    if (!dead) {
-      for (const car of game.cars.concat(game.police)) {
-        if (car.dead) continue;
-        const dx = b.x - car.x;
-        const dy = b.y - car.y;
-        const along = dx * Math.cos(car.angle) + dy * Math.sin(car.angle);
-        const side = -dx * Math.sin(car.angle) + dy * Math.cos(car.angle);
-        if (Math.abs(along) < 24 && Math.abs(side) < 14) {
-          car.health -= b.damage;
-          if (car.kind === 'police') commitCrime(1);
-          else if (copNearby(700)) commitCrime(1);
-          spawnParticles(b.x, b.y, '#ffd23c', 5, 80);
-          dead = true;
-          break;
-        }
-      }
-    }
-    if (dead) game.bullets.splice(i, 1);
-  }
+  // --- bullets: fly, hit a ped or a car, or fizzle out on their own
+  updateBullets(dt);
 
   // --- pedestrians
   const danger = game.mouseDown && player.onFoot ? { x: player.x, y: player.y, r: 420 } : null;
@@ -491,7 +738,7 @@ function stepWorld(dt) {
 
   // --- traffic
   for (const car of game.cars) {
-    if (car.kind === 'traffic') updateTrafficCar(car, dt, game.cars, rng);
+    if (car.kind === 'traffic') updateTrafficCar(car, dt, game.cars, rng, game.peds);
   }
   game.trafficTimer -= dt;
   if (game.trafficTimer <= 0) {
@@ -537,7 +784,9 @@ function stepWorld(dt) {
         game.carCrashCooldown = 0.8;
         other.health -= (speed - 200) / 14;
         car.health -= (speed - 200) / 30;
-        if (speed > 320 && copNearby(600)) commitCrime(1);
+        // Only a hard smash in plain sight of a cop earns a star: a parking
+        // nudge at city speed is not a crime spree.
+        if (speed > 420 && copNearby(450)) commitCrime(1);
         spawnParticles(other.x, other.y, '#ffd23c', 8, 120);
         renderer.addShake(0.45);
         audio.crash();
@@ -555,7 +804,8 @@ function stepWorld(dt) {
   game.policeTimer -= dt;
   const targetCops = policeTargetCount(game.wanted.level);
   if (game.policeTimer <= 0) {
-    game.policeTimer = 1.2;
+    // Hotter heat brings cruisers faster (v3 wanted tuning).
+    game.policeTimer = policeSpawnInterval(game.wanted.level);
     const alive = game.police.filter((c) => !c.dead);
     if (alive.length < targetCops) {
       game.police.push(spawnPoliceCar(rng, player.x, player.y));
@@ -567,45 +817,13 @@ function stepWorld(dt) {
       }
     }
   }
-  for (const cop of game.police) updatePoliceCar(cop, dt, player, game.city);
+  for (const cop of game.police) updatePoliceCar(cop, dt, player, game.city, game.wanted.level > 0);
   for (let i = game.police.length - 1; i >= 0; i -= 1) {
     if (game.police[i].dead && game.police[i].fade <= 0) game.police.splice(i, 1);
   }
 
-  // --- police ramming Lena
-  for (const cop of game.police) {
-    if (cop.dead) continue;
-    const d = dist(cop.x, cop.y, player.x, player.y);
-    if (player.onFoot) {
-      if (d < 34) {
-        if (hurtPlayer(player, 10)) {
-          endGame('wasted');
-          return;
-        }
-        renderer.addShake(0.5);
-        audio.crash();
-        if (game.wanted.level >= 2) {
-          player.bustedTimer += dt;
-          if (player.bustedTimer > 2) {
-            endGame('busted');
-            return;
-          }
-        }
-      } else {
-        player.bustedTimer = Math.max(0, player.bustedTimer - dt);
-      }
-    } else if (player.car && d < 46 && Math.abs(cop.speed) > 120 && cop.ramCooldown <= 0) {
-      cop.ramCooldown = 1.2;
-      if (hurtPlayer(player, 8)) {
-        endGame('wasted');
-        return;
-      }
-      player.car.health -= 6;
-      renderer.addShake(0.55);
-      audio.crash();
-      spawnParticles(cop.x, cop.y, '#ffd23c', 8, 120);
-    }
-  }
+  // --- police contact: a cruiser on top of Lena hurts her, or rams her car
+  if (updatePoliceContact(dt)) return;
 
   // --- missions
   const missionEvent = updateMission(game.missions, game, dt);
@@ -614,17 +832,31 @@ function stepWorld(dt) {
     if (done) {
       game.money += done.reward;
       audio.jingle();
+      addFloatText(player.x, player.y - 44, `+$${done.reward}`, '#7de89a', 22);
+      addFloatText(player.x, player.y - 70, 'MISSION COMPLETE', '#ffd23c', 18);
       saveGame(game);
-      announce(`${done.title} complete — +$${done.reward}.`);
+      const next = nextMissionPreview(game.missions);
+      announce(next
+        ? `${done.title} complete — +$${done.reward}. Next: ${next.title} ($${next.reward}).`
+        : `${done.title} complete — +$${done.reward}.`);
+      // The next job may need wheels: never start it stranded on foot with
+      // no car in reach.
+      if (!game.missions.done) ensureCarNear(player.x, player.y);
+      if (game.missions.index === 1) ensureTargetCar(); // mission 2 needs its coupe
       if (game.missions.done) {
         showScreen('complete');
-        document.getElementById('complete-text').textContent = `The debt is paid. Lena is free — and Costa Sol is hers. Final take: $${game.money}.`;
+        const side = sideTotals(game.side);
+        document.getElementById('complete-text').textContent = `The debt is paid. Lena is free — and Costa Sol is hers. Final take: $${game.money} (side work: $${side.earned} from ${side.fares} fares, ${side.packages} packages, ${side.jumps} jumps).`;
         audio.jingle();
       }
     }
   } else if (missionEvent === 'failed') {
     announce('Out of time. The job is blown — try again.');
-    startMission(game.missions, game.missions.index);
+    // Retry clean: fresh timer, the mission car back on the map, a ride
+    // nearby, and no leftover state from the failed attempt.
+    resetMissionClean(game.missions);
+    ensureTargetCar();
+    ensureCarNear(player.x, player.y);
   }
   // Mission 6 opens with the whole city on her tail; the robbery arms three stars.
   if (game.missions.index === 5 && game.missions.objective === 0 && game.wanted.level < 4) setWanted(game.wanted, 4);
@@ -634,13 +866,55 @@ function stepWorld(dt) {
     announce('Alarm! Three stars — run!');
   }
 
-  // --- particles and tire marks fade
-  for (let i = game.particles.length - 1; i >= 0; i -= 1) {
-    const p = game.particles[i];
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.life -= dt;
-    if (p.life <= 0) game.particles.splice(i, 1);
+  // --- particles (one pooled sweep), tire marks and floating texts fade
+  updateParticles(game.particles, dt);
+
+  // --- side work: taxi fares, hidden packages, stunt jumps
+  const sideEvent = updateSide(game.side, game, dt);
+  if (sideEvent === 'fare-waiting') {
+    const t = game.side.taxi;
+    const ped = createWaitingPed(t.px, t.py);
+    game.peds.push(ped);
+    game.farePed = ped;
+    announce('A fare is waiting — pull up in a car and press E.');
+  } else if (sideEvent === 'fare-expired') {
+    removeFarePed();
+    announce('The fare gave up waiting.');
+  } else if (sideEvent === 'fare-late') {
+    removeFarePed();
+    announce('Too slow — the fare walked off.');
+  }
+  if (player.onFoot) {
+    const found = collectPackageAt(game.side, player.x, player.y);
+    if (found > 0) {
+      game.money += found;
+      audio.cash();
+      addFloatText(player.x, player.y - 34, `+$${found} HIDDEN PACKAGE`, '#ffd23c', 16);
+      announce(`Hidden package found — +$${found}.`);
+    }
+  } else if (player.car) {
+    const jumpSpeed = checkJump(game.side, player.car);
+    if (jumpSpeed > 0) {
+      game.money += JUMP_REWARD;
+      audio.jumpWhoosh();
+      renderer.addShake(0.5);
+      addFloatText(player.x, player.y - 44, `STUNT JUMP! +$${JUMP_REWARD}`, '#ff8c28', 20);
+      announce(`Stunt jump at ${Math.round(jumpSpeed * 0.24)} km/h — +$${JUMP_REWARD}.`);
+    }
+    const farePay = taxiArrived(game.side, player.x, player.y);
+    if (farePay > 0) {
+      game.money += farePay;
+      audio.cash();
+      removeFarePed();
+      addFloatText(player.x, player.y - 44, `FARE +$${farePay}`, '#7de89a', 20);
+      announce(`Fare delivered — +$${farePay}.`);
+    }
+  }
+  for (let i = game.floatTexts.length - 1; i >= 0; i -= 1) {
+    const f = game.floatTexts[i];
+    f.y -= 34 * dt;
+    f.life -= dt;
+    if (f.life <= 0) game.floatTexts.splice(i, 1);
   }
   for (let i = game.tireMarks.length - 1; i >= 0; i -= 1) {
     game.tireMarks[i].life -= dt * 0.25;
@@ -659,6 +933,16 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - (frame.last || now)) / 1000, MAX_FRAME);
   frame.last = now;
+  // Frame-rate readout: count frames over each half second, smoothed by the
+  // HUD's own update. Reported honestly — headless software rendering is
+  // slower than a real GPU, and the number says what it says.
+  game.fpsFrames += 1;
+  game.fpsTime += dt;
+  if (game.fpsTime >= 0.5) {
+    game.fps = Math.round(game.fpsFrames / game.fpsTime);
+    game.fpsFrames = 0;
+    game.fpsTime = 0;
+  }
   if (game.screen === 'play') {
     frame.acc = (frame.acc || 0) + dt;
     let guard = 0;
@@ -671,7 +955,7 @@ function frame(now) {
   } else if (game.screen === 'title') {
     // The city lives behind the title: traffic cruises, people stroll.
     for (const car of game.cars) {
-      if (car.kind === 'traffic') updateTrafficCar(car, STEP, game.cars, rng);
+      if (car.kind === 'traffic') updateTrafficCar(car, STEP, game.cars, rng, game.peds);
     }
     for (const ped of game.peds) updatePed(ped, STEP, game.city, rng, null);
   }
@@ -783,15 +1067,17 @@ function stageShot(name) {
     game.cars.push(t1, t2);
     simulateDrive(2.5, 4400, 1800, { axis: 'h', line: 1800, dir: 1 });
   } else {
-    // On foot by the park, pedestrians strolling, mission 1 still open.
-    game.player.x = 2350;
-    game.player.y = 1560;
+    // On foot by the north plaza, pedestrians strolling, mission 1 still open
+    // — and a hidden package glinting by the fountain, so the frame shows
+    // the side work too.
+    game.player.x = 1240;
+    game.player.y = 900;
     game.player.onFoot = true;
     game.player.angle = -Math.PI / 2;
     startMission(game.missions, 0);
     // Pull a few pedestrians onto the sidewalks around her, so the frame
     // shows the city's people, not just its streets.
-    const nearSpots = [[2280, 1480], [2420, 1500], [2260, 1620], [2440, 1640], [2350, 1440], [2200, 1560]];
+    const nearSpots = [[1170, 820], [1310, 840], [1150, 960], [1330, 980], [1240, 780], [1100, 900]];
     for (let i = 0; i < nearSpots.length && i < game.peds.length; i += 1) {
       game.peds[i].x = nearSpots[i][0];
       game.peds[i].y = nearSpots[i][1];
@@ -825,10 +1111,14 @@ function stageShot(name) {
 
 // ---------------------------------------------------------------- boot
 
-// The Continue button only shows when a save exists.
+// The Continue button only shows when a save exists, and says what is in it.
 if (!hasSave()) {
   const b = document.getElementById('btn-continue');
   if (b) b.style.display = 'none';
+} else {
+  const b = document.getElementById('btn-continue');
+  const summary = saveSummary();
+  if (b && summary) b.textContent = summary;
 }
 showScreen('title');
 announce('Costa Sol. Press Enter or click New Game to start.');

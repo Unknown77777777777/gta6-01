@@ -7,7 +7,32 @@ import { dist } from './city.js';
 export const MAX_WANTED = 5;
 export const DECAY_QUIET_SECONDS = 28;
 export const DECAY_STEP_SECONDS = 9;
-export const HIDEOUT_CLEAR_SECONDS = 2.5;
+export const HIDEOUT_CLEAR_SECONDS = 3;
+
+/**
+ * Heat tuning (v3): hotter chases are harder to shake. The quiet time before
+ * the first star drops grows with the level (28 s at one star, +6 s a star),
+ * each star then takes longer to cool (+2 s a star past the second), and
+ * cruisers arrive faster the hotter it gets. At five stars the city fields
+ * five cars instead of four.
+ */
+export function quietSecondsFor(level) {
+  return DECAY_QUIET_SECONDS + Math.max(0, level - 1) * 6;
+}
+
+export function decayStepFor(level) {
+  return DECAY_STEP_SECONDS + Math.max(0, level - 2) * 2;
+}
+
+/** Seconds between police spawns: 1.2 s at one star, down to 0.6 s at five. */
+export function policeSpawnInterval(level) {
+  return Math.max(0.6, 1.2 - Math.max(0, level - 1) * 0.15);
+}
+
+/** Progress 0..1 toward clearing the heat inside the hideout (HUD hint). */
+export function hideoutProgress(wanted) {
+  return Math.min(1, wanted.hideoutTimer / HIDEOUT_CLEAR_SECONDS);
+}
 
 export function createWanted() {
   return {
@@ -23,14 +48,14 @@ export function createWanted() {
 export function addWanted(wanted, stars) {
   wanted.level = Math.min(MAX_WANTED, wanted.level + stars);
   wanted.sinceCrime = 0;
-  wanted.decayTimer = DECAY_STEP_SECONDS;
+  wanted.decayTimer = decayStepFor(wanted.level);
 }
 
 /** Set the wanted level outright (mission 6 opens at four stars). */
 export function setWanted(wanted, stars) {
   wanted.level = Math.max(0, Math.min(MAX_WANTED, stars));
   wanted.sinceCrime = 0;
-  wanted.decayTimer = DECAY_STEP_SECONDS;
+  wanted.decayTimer = decayStepFor(wanted.level);
 }
 
 /** Clear the heat entirely (busted, wasted, or a clean hideout escape). */
@@ -47,7 +72,18 @@ export function policeTargetCount(level) {
   if (level === 1) return 1;
   if (level === 2) return 2;
   if (level === 3) return 3;
-  return 4;
+  if (level === 4) return 4;
+  return 5; // five stars: the whole city is on her tail
+}
+
+/** Plain-language name for a wanted level, for announcements and the HUD. */
+export function heatLevelName(level) {
+  if (level <= 0) return 'Clean';
+  if (level === 1) return 'Heat';
+  if (level === 2) return 'Hot';
+  if (level === 3) return 'Blazing';
+  if (level === 4) return 'Inferno';
+  return 'Lockdown';
 }
 
 /**
@@ -69,9 +105,12 @@ export function updateWanted(wanted, dt, pos, police, hideout) {
     wanted.hideoutTimer = 0;
     return null;
   }
-  // Hiding in the garage while unseen burns the whole heat off.
+  // Hiding in the garage burns the whole heat off: the garage is the one place
+  // the heat cannot follow, so the timer runs even while a cruiser is still
+  // circling outside — otherwise an 'escape' objective could never complete
+  // while police stay within sight range. Takes 3 seconds inside the zone.
   const inHideout = dist(pos.x, pos.y, hideout.x, hideout.y) < hideout.r;
-  if (inHideout && !wanted.seenByPolice) {
+  if (inHideout) {
     wanted.hideoutTimer += dt;
     if (wanted.hideoutTimer >= HIDEOUT_CLEAR_SECONDS) {
       clearWanted(wanted);
@@ -80,12 +119,13 @@ export function updateWanted(wanted, dt, pos, police, hideout) {
     return null;
   }
   wanted.hideoutTimer = 0;
-  // Quiet and unseen: the heat cools off one star at a time.
-  if (wanted.sinceCrime > DECAY_QUIET_SECONDS && !wanted.seenByPolice) {
+  // Quiet and unseen: the heat cools off one star at a time. Hotter chases
+  // need longer quiet (quietSecondsFor) and cool slower (decayStepFor).
+  if (wanted.sinceCrime > quietSecondsFor(wanted.level) && !wanted.seenByPolice) {
     wanted.decayTimer -= dt;
     if (wanted.decayTimer <= 0) {
       wanted.level -= 1;
-      wanted.decayTimer = DECAY_STEP_SECONDS;
+      wanted.decayTimer = decayStepFor(wanted.level);
       if (wanted.level === 0) {
         wanted.sinceCrime = 999;
         return 'cooled';

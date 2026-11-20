@@ -92,6 +92,7 @@ export function createMissionState() {
     failed: false, // a timed objective ran out
     justCompleted: null, // mission just finished, for the banner
     banner: 0, // seconds the banner stays up
+    completedIds: [], // ids of finished missions, in order — the debt ledger
   };
 }
 
@@ -124,6 +125,7 @@ function advance(state) {
   if (state.objective >= mission.objectives.length) {
     state.justCompleted = mission;
     state.banner = 4;
+    if (!state.completedIds.includes(mission.id)) state.completedIds.push(mission.id);
     state.index += 1;
     if (state.index >= MISSIONS.length) {
       state.done = true;
@@ -221,9 +223,92 @@ export function missionTarget(state) {
   return { x: obj.x, y: obj.y, label: obj.text };
 }
 
+/**
+ * The waypoint target for objectives that carry no fixed point: a 'heat'
+ * objective points at the nearest stealable car (make noise there), an
+ * 'escape' objective points at the Sol Garage hideout. Falls back to the
+ * fixed marker when the objective has one. `game` supplies cars/hideout.
+ */
+export function missionTargetFor(state, game) {
+  const fixed = missionTarget(state);
+  if (fixed) return fixed;
+  const obj = currentObjective(state);
+  if (!obj || !game) return null;
+  const px = game.player.car ? game.player.car.x : game.player.x;
+  const py = game.player.car ? game.player.car.y : game.player.y;
+  if (obj.type === 'escape') {
+    return { x: game.city.hideout.x, y: game.city.hideout.y, label: 'Hide at Sol Garage' };
+  }
+  if (obj.type === 'heat') {
+    let best = null;
+    let bestD = Infinity;
+    for (const car of game.cars) {
+      if (car.dead || car.kind === 'police') continue;
+      const d = dist(px, py, car.x, car.y);
+      if (d < bestD) { bestD = d; best = car; }
+    }
+    if (best) return { x: best.x, y: best.y, label: 'Steal a car or make noise' };
+  }
+  return null;
+}
+
 /** Money earned so far, for the debt meter. */
 export function moneyEarned(state) {
   let sum = 0;
   for (let i = 0; i < state.index && i < MISSIONS.length; i += 1) sum += MISSIONS[i].reward;
   return sum;
+}
+
+/** What is still owed to Marco Venn, from the finished-mission ledger. */
+export function debtLeft(state) {
+  return Math.max(0, DEBT_TOTAL - moneyEarned(state));
+}
+
+/** Debt progress as { paid, total, left, pct }: the HUD's debt bar reads this. */
+export function debtProgress(state) {
+  const paid = moneyEarned(state);
+  return { paid, total: DEBT_TOTAL, left: Math.max(0, DEBT_TOTAL - paid), pct: Math.min(100, Math.round((paid / DEBT_TOTAL) * 100)) };
+}
+
+/**
+ * One object for the HUD's objective panel: the mission title, the current
+ * objective text, its reward, and the seconds left on a timed objective.
+ * Keeps the panel's wording in one place instead of spread over the HUD.
+ */
+export function missionSummary(state) {
+  const mission = currentMission(state);
+  const obj = currentObjective(state);
+  if (!mission || !obj) return null;
+  return {
+    title: mission.title,
+    text: obj.text,
+    reward: mission.reward,
+    timer: state.timer,
+    type: obj.type,
+    done: state.done,
+  };
+}
+
+/**
+ * The next job after the current one: title and reward, for the "what is
+ * next" line when a mission pays out. Null when the story is finished.
+ */
+export function nextMissionPreview(state) {
+  const next = state.done ? null : MISSIONS[state.index + 1];
+  if (!next) return null;
+  return { title: next.title, reward: next.reward, briefing: next.briefing };
+}
+
+/** The current mission's briefing text (the story so far, in one line). */
+export function missionBriefing(state) {
+  const mission = currentMission(state);
+  return mission ? mission.briefing : '';
+}
+
+/** A clean retry of the active mission: objectives, timer and hold reset, no
+ * duplicated NPCs, cars or timers — the anti-soft-lock reset after a fail or
+ * a wasted/busted respawn. */
+export function resetMissionClean(state) {
+  const idx = state.done ? MISSIONS.length - 1 : state.index;
+  startMission(state, Math.min(idx, MISSIONS.length - 1));
 }

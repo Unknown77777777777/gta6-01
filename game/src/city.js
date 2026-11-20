@@ -132,8 +132,68 @@ export function createCity(seed) {
   const hospital = buildings.find((b) => b.kind === 'hospital');
   const store = buildings.find((b) => b.kind === 'store');
 
+  // Streetlamps along the main avenues and the beachfront: warm pools of
+  // light for the sunset-to-neon lighting pass. Fixed positions, seeded order.
+  const streetlamps = [];
+  for (const rx of [600, 1400, 2200, 3000, 3800]) {
+    for (let y = 400; y <= 3000; y += 800) streetlamps.push({ x: rx + 62, y });
+  }
+  for (const ry of [600, 1400, 2200]) {
+    for (let x = 400; x <= 4600; x += 800) streetlamps.push({ x, y: ry + 62 });
+  }
+  for (let x = 400; x <= 4600; x += 700) streetlamps.push({ x, y: 3160 });
+
+  // Side-work spots, all on open ground Lena can reach on foot: the park,
+  // the plaza, the beach, the pier, the garage forecourt, the hospital and
+  // store fronts, and the north marina roadside. Eight hidden packages pay
+  // $25 each; three taxi stands are where fares wait; three ramps on the
+  // long avenues pay for a fast jump.
+  const garageFront = { x: garage.x + garage.w / 2, y: garage.y + garage.h + 60 };
+  const packageSpots = [
+    { x: park.x + park.w * 0.3, y: park.y + park.h * 0.3 },
+    { x: plaza.x + plaza.w * 0.75, y: plaza.y + plaza.h * 0.7 },
+    { x: 1400, y: 3240 },
+    { x: 4680, y: 1800 },
+    { x: garageFront.x - 60, y: garageFront.y + 30 },
+    { x: hospital.x + hospital.w / 2, y: hospital.y + hospital.h + 40 },
+    { x: store.x + store.w / 2, y: store.y - 40 },
+    { x: 4550, y: 640 },
+  ];
+  const taxiStands = [
+    { x: plaza.x + plaza.w / 2, y: plaza.y + plaza.h + 30 },
+    { x: 4200, y: 2540 },
+    { x: 2200, y: 3120 },
+    { x: garageFront.x, y: garageFront.y },
+  ];
+  const jumpRamps = [
+    { x: 2200, y: 2900, angle: -Math.PI / 2 },
+    { x: 3000, y: 600, angle: 0 },
+    { x: 4200, y: 2200, angle: Math.PI / 2 },
+  ];
+  // Boats anchored in the harbour water by the pier: Marco Venn's getaway
+  // boat among them. They bob on the swell (drawn live, not baked).
+  const boats = [
+    { x: 4730, y: 1560, angle: 0.3, color: '#e8e8e8', size: 1 },
+    { x: 4720, y: 2080, angle: -0.4, color: '#d8b13c', size: 0.8 },
+    { x: 4700, y: 2450, angle: 0.9, color: '#4a90d8', size: 0.9 },
+  ];
+  // Beach furniture: umbrellas and towels scattered on the sand, seeded so
+  // the same seed always lays the same beach. Baked into the static tiles.
+  const umbrellaColors = ['#e85a5a', '#4a90d8', '#f2c230', '#6ac88a', '#c86ae8'];
+  const beachProps = [];
+  for (let i = 0; i < 9; i += 1) {
+    const ux = 350 + rng() * 4100;
+    const uy = 3150 + rng() * 190;
+    beachProps.push({
+      x: ux, y: uy,
+      color: umbrellaColors[Math.floor(rng() * umbrellaColors.length)],
+      towel: rng() < 0.7 ? { x: ux + 26 + rng() * 20, y: uy + 10 + rng() * 14, color: umbrellaColors[Math.floor(rng() * umbrellaColors.length)] } : null,
+    });
+  }
+
   return {
-    seed, buildings, trees, park, plaza, garage, hospital, store,
+    seed, buildings, trees, park, plaza, garage, hospital, store, streetlamps,
+    packageSpots, taxiStands, jumpRamps, beachProps, boats,
     beachY: BEACH_Y, waterY: WATER_Y, harborX: HARBOR_X,
     // The pier juts into the harbour water on the east edge; it is walkable.
     pier: { x: 4600, y: 1760, w: 180, h: 80 },
@@ -224,6 +284,18 @@ export function nearestRoadPoint(x, y) {
     if (d < bestD) { bestD = d; best = { x, y: ry, axis: 'h', road: ry }; }
   }
   return best;
+}
+
+/** The district Lena is standing in, for the HUD's location line. */
+export function districtAt(x, y) {
+  if (y >= 3100) return 'Beachfront';
+  if (x >= 4600) return 'Harbour Pier';
+  if (x >= 4200 && y >= 2200) return 'East Docks';
+  if (x < 1400 && y < 1200) return 'North Plaza';
+  if (x >= 3600 && x <= 4200 && y >= 2600 && y <= 3100) return 'Sol Garage';
+  if (x < 1400 && y >= 2200) return 'South Market';
+  if (x >= 4200 && y < 1200) return 'North Marina';
+  return 'Downtown';
 }
 
 /** A random point on a road, at least `minDist` away from (x, y) when given. */
