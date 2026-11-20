@@ -90,3 +90,75 @@ Cara Memakainya di Muse AI:
    > "Baca UPGRADE_SPEC.md secara menyeluruh. Inspeksi struktur kode gta6-01 yang ada sekarang, lalu kerjakan Fase 1 sampai Fase 4 secara berurutan dengan kode 100% orisinal. Setelah selesai, jalankan tes simulasi untuk memastikan Misi 1–6 berjalan lancar tanpa error dan siap untuk sealed recording."
    >
  * Setelah Muse AI selesai memodifikasi kode dan lolos tes lokal, lakukan satu kali playthrough bersih saat menjalankan proses sealed recording baru (tunjukkan kota 2.5D, curi mobil, ganti radio, kejar-kejaran polisi, dan selesaikan misi) sebelum mengirim entri final sebelum 24 Nov 2026 22:00 WIB.
+
+## 7. CATATAN PELAKSANAAN (v2)
+
+Dikerjakan 20 Nov 2026 oleh builder (sesi terekam, recording id 01a1f908-0041-74d1-92fb-40ad2a373250). Semua fase selesai dan lolos verifikasi di bawah. Tidak ada submit / repo GitHub baru dari builder — itu tugas koordinator/parent.
+
+### Fase 1 — Audit & anti-soft-lock (Misi 1–6)
+- `missions.js`: ledger `completedIds`, `missionTargetFor()` (fallback waypoint heat/escape), `debtLeft()`, `resetMissionClean()` (retry bersih tanpa duplikasi NPC/mobil/timer).
+- `main.js`: mobil starter terjamin di dekat spawn; `ensureTargetCar()` (coupe M2 muncul lagi bila hancur/hilang); `ensureCarNear()` (mobil terdekat terjamin saat misi selesai/gagal/hancur/respawn); `respawn()` ditulis ulang — mobil pemain dikembalikan ke `game.cars` dulu (bug v1: coupe target lenyap bila Lena wasted/busted saat mengendarainya). Curi mobil kembali ke aturan v1 (bintang hanya bila polisi <600px); tabrakan lalu lintas hanya bila kecepatan >420 dan polisi <450px; ram polisi ke pejalan kaki 10→4 damage, ambang busted 2→1,5 dtk.
+- Bug air (ditemukan QA run11): eject saat mobil hancur bisa mendarat di air (x≥4680) dan Lena membeku karena jalan kaki menolak gerakan di air — eject kini mencoba +40/−40x, −40/+40y sampai dapat titik darat.
+- `wanted.js`: hideout membersihkan heat setelah 3 dtk di dalam zona garasi meski polisi masih melihat (sebelumnya: hanya saat tak terlihat — praktis mustahil).
+- `save.js`: versi 2 — menyimpan `completedIds`, `debtPaid`, `radioStation`.
+- `player.js`: `resetPlayerTimers()`, `playerIsAiming()`.
+
+### Fase 2 — Visual 2.5D neo-noir & dynamic lighting
+- `render.js`: atap extruded parallax 0.14 dari pusat kamera, dinding gradasi gelap (`shade()`), detail atap prosedural (AC, skylight, helipad + "H" untuk hgt≥54, strip neon), culling margin 60→300px. Tekstur prosedural offscreen canvas saat init (aspal, pasir, trotoar; 0 network), zebra cross di tiap persimpangan. `drawSunlight()` diubah dari siang ke gradasi golden-sunset → neon-night + vignette.
+- `drawLighting()` (baru): cone headlight (radial gradient, `globalCompositeOperation='lighter'`), kolam sirene merah-biru, glow streetlamp. `drawCar()`: bayangan, asap putih HP<60%, asap hitam + api HP<30%. `drawPed()`: bob + bayangan. Bullet tracer, floating text, panah waypoint emas di ring ~75px + jarak meter.
+- `pedestrians.js`: `pace`/`stride`, beach stroller tidak lagi ditarik ke aspal jalan 3000 (tetap di pasir y3120–3380).
+- `city.js`: array `streetlamps` (avenue + beachfront).
+- Optimasi FPS (ditemukan saat QA: chase 25,4 FPS di headless): glow dijadikan sprite pre-render sekali di init (`makeGlowSprite` — headlight/sirene/lampu) dan overlay sunset/vignette di-pre-render ke `sunlightCanvas`; `drawImage` menggantikan ~35 gradient fill per frame. Hasil terukur: spawn tenang 55,5–60,2 FPS, nyetir 45,7–60,1 FPS, chase 4 bintang 38,7 FPS (headless Chromium, software rendering; fluktuasi antar run ±15 FPS).
+
+### Fase 3 — Game feel, kelas kendaraan, radio
+- `vehicles.js`: 4 kelas — Compact (470/380/3.0/0.9), Sedan (560/420/2.6/1.2), Sports (700/560/3.2/1.0), Police (700/540/3.0/1.5); `driveCar` memakai parameter kelas; cruise lalu lintas skala dengan topSpeed kelas.
+- `main.js`: skid mark saat belok tajam kecepatan tinggi; asap damage; ledakan 26+14 partikel + shake saat HP 0; float text `+$reward`, `MISSION COMPLETE`, `WANTED ★★`.
+- `audio.js`: radio prosedural 3 stasiun (0 COSTA SYNTHWAVE 116 BPM, 1 HARBOR LO-FI 72 BPM, 2 POLICE SCANNER 90 BPM), auto-nyala saat masuk mobil, R ganti stasiun, banner nama 2,5 dtk.
+- `hud.js`: panel objektif menampilkan jarak GPS live (`· ${d}m`) + progres hideout % saat escape; banner radio `♪ ${nama}`.
+- `index.html`/`style.css`: elemen `#hud-radio`, hint tombol R.
+- `README.md`: diperbarui ke edisi 2.5D (badge live make.fun tidak diubah).
+
+### Perbaikan game tambahan yang ditemukan QA (di luar spec, perlu agar M1–M6 bisa selesai)
+- `vehicles.js` `driveCar`: mobil yang sudah terlanjur di zona air bisa merangkak kembali ke darat (kecepatan dibatasi 150); sebelumnya semua gerakan ke air diblokir sehingga mobil yang terdorong ke air terjebak selamanya.
+- `vehicles.js`/`main.js` `updatePoliceCar`: polisi kini menerima flag `pursuing` — saat wanted 0 mereka mundur dan pergi (bukan terus mengejar); ram polisi hanya berlaku saat wanted > 0. Sebelumnya 3 cruiser menumpuk di hideout dan meremukkan Lena sampai wasted padahal heat sudah 0.
+
+### Fase 4 — Verifikasi (20 Nov 2026, Playwright 1.65.1 Chromium headless, server lokal port 8901)
+- Full playthrough M1–M6 dengan input keyboard/mouse asli saja (tanpa teleport/warp/manipulasi state), lolos penuh di run29 (exit 0):
+  - M1 First Fare 46,8 dtk — $190, utang $1850, wanted 1
+  - M2 Borrowed Wheels 78,6 dtk — $390, utang $1650, wanted 2
+  - M3 Heat Run 90,2 dtk — $690, utang $1350, wanted 0
+  - M4 Hot Package 141,9 dtk — $1040, utang $1000, wanted 0
+  - M5 Quick Score 174,9 dtk — $1540, utang $500, wanted 4
+  - M6 The Last Getaway 193,5 dtk — $2340, utang $0, layar `complete`
+- Console errors: 0. Network: 13 request, 0 eksternal (semua same-origin localhost).
+- FPS terukur (headless, software rendering): spawn tenang 55,5–60,2; nyetir 45,7–60,1; chase 4 bintang (M6) 38,7.
+- Screenshot diregenerasi dari build baru (`?shot=`, seed 7), 1280×720 JPEG: 1-cover.jpg 107,5 KiB, 2-driving.jpg 107,2 KiB, 3-mission.jpg 101,6 KiB, 4-foot.jpg 111,3 KiB (semua ≤256 KiB). Cover menampilkan kota 2.5D + kejar-kejaran polisi + HUD/minimap + objektif misi; HUD terbaca jelas, tidak bertumpuk (dicek visual).
+- Sintaks: `node --input-type=module --check` lolos untuk ke-11 file `game/src/*.js`. Tidak ada sisa TEMP DEBUG di repo.
+- Kit check (dari folder kit): 4 passed, 0 failed, 17 skipped (cek transkrip berjalan di server dari sealed recording), 5 dicek saat submission (repo public/owner/dibuat-setelah-buka/commit-di-repo/duplicate snapshot — urusan koordinator saat push + submit). Catatan kit: kit lokal level 27, situs di level 28.
+- Dossier determinism: 2 run `MAKEFUN_OUTPUT_DIR=outN node main.ts` menghasilkan `dossier.json` byte-identik, sha256 `7263f35d3b34ad80db1c7599dade45f5299ce9fa92406dcd73f29529156df800` (712 KiB).
+- Batas ukuran: game/ 164 KiB & 13 file (maks 48 MiB / 993 file); index.html 3902 byte (maks 1 MiB); dossier 712 KiB (maks 1,5 MiB).
+- Perjalanan QA: run11–run28 gagal di titik-titik berbeda dan semuanya diperbaiki sampai lolos — wedge mobil di blok (rute dihitung ulang saat macet + steer ke titik jalan terdekat, bukan waypoint), M2 mencuri mobil yang salah (parkir mobil M1 jauh dari coupe + verifikasi objektif steal), M3 auto-selesai selama pengiriman M2 (guard lewati blok M3), M5 menunggu wanted 0 yang hanya muncul satu frame sebelum M6 menaikkannya lagi (tunggu selesainya misi), false-positive arrival saat mengambil mobil pengganti (kedatangan tidak boleh menyelesaikan drive saat fetchingCar), jalan kaki memotong sudut garasi (toleransi waypoint pejalan kaki 130→45px).
+- Commit lokal: (hash dicatat di laporan akhir builder ke koordinator).
+
+## 8. CATATAN PELAKSANAAN (v3) — OPTIMASI FPS + SIDE WORK
+
+Dikerjakan 20 Nov 2026 oleh builder (sesi terekam, recording id 01a1f9a0-1c16-7419-b75e-d959a47ccbeb). v2 tidak bisa di-submit (recording mati tanpa seal), jadi v3 dibangun di dalam recording baru yang dijalankan parent. Semua kode di bawah ditulis di dalam recording ini.
+
+### TUGAS 1 — Optimasi FPS (render.js ditulis ulang)
+- **Static tile layer:** ground, jalan, blok, park, plaza, dermaga, dan pohon yang tidak pernah bergerak kini di-bake sekali saat init ke 48 tile offscreen 640×640 (8×6 di peta 4800×3600). Per frame hanya ~6 `drawImage` tile yang terlihat — menggantikan ratusan pattern fill, zebra rect, dan kerb stroke per frame di software rendering. Surf line tetap dinamis (animasi ombak).
+- **Shade bangunan pre-computed:** `shade()` (parseInt hex + string building) tidak lagi dipanggil per bangunan per frame; `_wallDark`/`_wallDarker`/`_shift` dihitung sekali per kota di `buildStaticLayer`. Font label/helipad di-hoist keluar loop.
+- **Lighting tanpa alokasi:** `drawLighting` tidak lagi `concat` array mobil per frame; headlight dibatasi secara prinsip — mobil parkir lampunya mati, lalu lintas hanya yang <700px dari Lena, polisi + mobil pemain selalu. ~60 sprite aditif per frame turun ke ~13.
+- **Particle pool (particles.js, baru):** 320 slot pre-allocated, spawn ambil slot mati, update sapu array tetap — nol alokasi objek per partikel per frame. `spawnBurst`/`spawnSmoke` dipakai main.js untuk ledakan, tabrakan, dan asap damage.
+- **HUD murah:** `updateHud` menulis `textContent` hanya bila nilainya berubah (`setText` + cache `_last`); `missionSummary`/`debtProgress` dari missions.js dipakai HUD.
+- **Hasil ukur (Playwright headless, Chromium software rendering, VM berbagi CPU — angka jujur, lihat laporan akhir):** A/B berurutan v3 vs v2 di beban yang sama: v3 sedikit lebih cepat di semua adegan (calm ~58–59, nyetir downtown ~49–50, chase 4 bintang ~51–53 vs v2 ~48–59). Headless software rendering tetap lebih lambat dari GPU asli; optimasi nyata, angka apa adanya.
+
+### TUGAS 2 — Side work (side.js, baru — 3 aktivitas, semua opsional)
+- **Taksi:** penumpang muncul di taxi stand (pin hijau TAXI), tunggu 90 dtk. Lena mendekat dengan mobil apa pun + tekan E → penumpang naik, tujuan stand lain, bayar $60+ jarak + tip $20 kalau <60 dtk. Timeout 150 dtk, batal saat busted/wasted. Penumpang adalah ped `waiting` (pedestrians.js: `createWaitingPed`, berdiri + melambai + tag TAXI, tidak stroll).
+- **Paket tersembunyi:** 8 titik di city.js (park, plaza, pantai, dermaga, garasi, hospital, store, marina) — jalan kaki di atasnya = +$25, marker diamond emas di world + minimap.
+- **Stunt jump:** 3 ramp di jalan panjang (city.js `jumpRamps`) — lewati >420 speed = +$50, cooldown 6 dtk, float text + shake + whoosh.
+- **Dukungan lain:** city.js tambah `packageSpots`/`taxiStands`/`jumpRamps`; vehicles.js parkir ~15% taksi kuning + `createTaxi` + `vehicleClassLabel`/`isTaxi` (1 taksi dijamin dekat spawn); audio.js `cash()`/`jumpWhoosh()`/`taxiBlip()`; save.js v3 simpan progres side (`packagesTaken`, `taxiFares`, `jumpsDone`); HUD tampilkan status side + FPS live; title screen punya legenda side work; wanted.js tuning (heat decay skala per level, spawn polisi lebih cepat saat panas, 5 polisi di bintang 5); player.js knockback saat ditabrak polisi; missions.js `missionSummary`/`debtProgress`; render.js gambar marker side; index.html + style.css elemen `#hud-side`/`#hud-fps`/`.side-legend`.
+
+### TUGAS 3 — Verifikasi (lihat laporan akhir builder untuk angka final)
+- Playthrough M1–M6 input keyboard asli (Playwright, tanpa teleport), 0 console error, 0 network eksternal, FPS per misi dicatat.
+- 4 screenshot baru dari build v3 (`?shot=`, seed 7), ≤256 KiB, 1280×720.
+- Kit check 0 FAIL; main.ts 2 run dossier byte-identik; main.ts kini punya pre-flight validation (gagal dengan pesan jelas kalau file wajib/screenshot hilang) + `BUILD_VERSION`.
