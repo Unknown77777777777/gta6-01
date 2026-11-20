@@ -15,6 +15,7 @@
     <div id="hud-money-box">
       <div id="hud-money">$40</div>
       <div id="hud-debt">DEBT $2000 TO MARCO VENN</div>
+      <div id="hud-debt-bar"><div id="hud-debt-fill"></div></div>
     </div>
     <div id="hud-objective-box">
       <div id="hud-objective"></div>
@@ -29,11 +30,15 @@
     <div id="hud-left">
       <div id="hud-ammo"></div>
       <div id="hud-speed"></div>
+      <div id="hud-side"></div>
+      <div id="hud-district"></div>
+      <div id="hud-fps"></div>
     </div>
     <canvas id="minimap" width="220" height="165" aria-label="Minimap of Costa Sol"></canvas>
   </div>
   <div id="hud-banner"></div>
-  <div id="hud-hint">WASD drive / walk &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
+  <div id="hud-radio"></div>
+  <div id="hud-hint">WASD drive / walk &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; R radio &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
 </div>
 
 <div id="screen-title" class="screen">
@@ -48,8 +53,13 @@
       <div><b>Mouse + Click</b> — aim &amp; shoot</div>
       <div><b>F</b> — punch</div>
       <div><b>Space</b> — handbrake</div>
-      <div><b>R</b> — reload</div>
+      <div><b>R</b> — radio station (in a car) / reload (on foot)</div>
       <div><b>P</b> — pause &nbsp; <b>M</b> — mute</div>
+    </div>
+    <div class="side-legend">
+      <div><b class="taxi">TAXI</b> — pull up to a waiting fare in any car, press <b>E</b>, drop them off for $60+</div>
+      <div><b class="pack">◆ Packages</b> — 8 hidden stashes around the city, $25 each on foot</div>
+      <div><b class="jump">≫ Jumps</b> — cross an orange ramp faster than 100 km/h for $50</div>
     </div>
     <div class="buttons">
       <button id="btn-new" class="primary">New Game</button>
