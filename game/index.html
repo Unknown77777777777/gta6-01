@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Costa Sol — an open-world crime game</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<canvas id="game" aria-label="Costa Sol: drive and walk around a sunny coastal city, take on missions for Marco Venn, and stay ahead of the police"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="hud-top">
+    <div id="hud-money-box">
+      <div id="hud-money">$40</div>
+      <div id="hud-debt">DEBT $2000 TO MARCO VENN</div>
+    </div>
+    <div id="hud-objective-box">
+      <div id="hud-objective"></div>
+      <div id="hud-timer"></div>
+    </div>
+    <div id="hud-wanted-box">
+      <div id="hud-stars" class="stars">☆☆☆☆☆</div>
+      <div id="hud-health"><div id="hud-health-fill" class="fill good"></div><span id="hud-health-text">100</span></div>
+    </div>
+  </div>
+  <div id="hud-bottom">
+    <div id="hud-left">
+      <div id="hud-ammo"></div>
+      <div id="hud-speed"></div>
+    </div>
+    <canvas id="minimap" width="220" height="165" aria-label="Minimap of Costa Sol"></canvas>
+  </div>
+  <div id="hud-banner"></div>
+  <div id="hud-hint">WASD drive / walk &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
+</div>
+
+<div id="screen-title" class="screen">
+  <div class="panel">
+    <h1>COSTA SOL</h1>
+    <p class="tagline">A sunny city. A heavy debt. One getaway driver.</p>
+    <p class="story">Lena Cruz drives for a living — and owes Marco Venn $2,000 for the last job that went wrong. Six jobs stand between her and a clean slate: fares, a borrowed coupe, a run from the law, a hot package, a quick score, and one last getaway to the harbour boat. The whole city is open: walk it, drive it, steal it.</p>
+    <div class="controls">
+      <div><b>WASD / Arrows</b> — walk &amp; drive</div>
+      <div><b>Shift</b> — run</div>
+      <div><b>E</b> — enter / steal a car, pick up</div>
+      <div><b>Mouse + Click</b> — aim &amp; shoot</div>
+      <div><b>F</b> — punch</div>
+      <div><b>Space</b> — handbrake</div>
+      <div><b>R</b> — reload</div>
+      <div><b>P</b> — pause &nbsp; <b>M</b> — mute</div>
+    </div>
+    <div class="buttons">
+      <button id="btn-new" class="primary">New Game</button>
+      <button id="btn-continue">Continue</button>
+    </div>
+    <p class="fine">An original game: its city, characters, story, art and sounds were made for this entry. No network requests — everything runs from these files.</p>
+  </div>
+</div>
+
+<div id="screen-pause" class="screen hidden">
+  <div class="panel">
+    <h1>PAUSED</h1>
+    <p class="story">Costa Sol waits for no one — except right now. Your progress is saved.</p>
+    <div class="buttons">
+      <button id="btn-resume" class="primary">Resume</button>
+      <button id="btn-restart">Restart Story</button>
+      <button id="btn-quit-title">Quit to Title</button>
+    </div>
+  </div>
+</div>
+
+<div id="screen-over" class="screen hidden">
+  <div class="panel">
+    <h1 id="over-title">WASTED</h1>
+    <p id="over-text" class="story"></p>
+    <div class="buttons">
+      <button id="btn-respawn" class="primary">Back on your feet</button>
+    </div>
+  </div>
+</div>
+
+<div id="screen-complete" class="screen hidden">
+  <div class="panel">
+    <h1>DEBT PAID</h1>
+    <p id="complete-text" class="story"></p>
+    <div class="buttons">
+      <button id="btn-roam" class="primary">Keep playing — free roam</button>
+    </div>
+  </div>
+</div>
+
+<button id="btn-mute">🔊 Sound: On</button>
+<p id="status" role="status" aria-live="polite"></p>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
