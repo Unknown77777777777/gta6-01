@@ -160,6 +160,30 @@ html, body {
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
 }
 
+/* The arsenal: which guns Lena owns and which one is in hand. */
+#hud-weapons {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffb37a;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+/* Clock and night line: the time of day and what the night is paying. */
+#hud-clock {
+  font-size: 14px;
+  font-weight: 700;
+  color: #bcd8ff;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+/* Active minigame: race position and timer, vigilante or paramedic status. */
+#hud-minigame {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffd23c;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
 #hud-ammo {
   font-size: 18px;
   font-weight: 700;
@@ -202,6 +226,39 @@ html, body {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
 }
 
+/* Dialogue box: the story speaks here, above the control hint, between the
+ * letterbox bars. Hidden until a briefing or debrief opens. */
+#hud-dialog {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 170px;
+  width: min(720px, 86vw);
+  background: rgba(12, 16, 28, 0.92);
+  border: 1px solid rgba(255, 210, 60, 0.5);
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+  color: #f2ead8;
+  z-index: 5;
+}
+#hud-dialog-name {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}
+#hud-dialog-text {
+  font-size: 17px;
+  line-height: 1.45;
+}
+#hud-dialog-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: right;
+}
+
 #hud-banner {
   position: absolute;
   top: 84px;
@@ -242,7 +299,10 @@ html, body {
 
 #hud-hint {
   position: absolute;
-  bottom: 14px;
+  /* Top centre, below the objective box and the banner slot: the bottom row
+   * belongs to the district line (long in v4) and the minimap, and the pill
+   * used to overlap both. Up here it is clear of everything. */
+  top: 132px;
   left: 50%;
   transform: translateX(-50%);
   font-size: 12px;
@@ -314,7 +374,8 @@ html, body {
 }
 .controls b { color: #ffe9a8; }
 
-/* Side-work legend on the title screen: taxi fares, packages, jumps. */
+/* Side-work legend on the title screen: taxi fares, packages, jumps, races,
+ * guns and the night. */
 .side-legend {
   display: grid;
   gap: 6px;
@@ -331,6 +392,9 @@ html, body {
 .side-legend .taxi { color: #50dc78; }
 .side-legend .pack { color: #ffd23c; }
 .side-legend .jump { color: #ff8c28; }
+.side-legend .race { color: #ffffff; }
+.side-legend .guns { color: #ffb37a; }
+.side-legend .night { color: #bcd8ff; }
 
 .buttons {
   display: flex;

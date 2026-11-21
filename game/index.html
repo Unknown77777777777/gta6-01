@@ -28,7 +28,10 @@
   </div>
   <div id="hud-bottom">
     <div id="hud-left">
+      <div id="hud-weapons"></div>
       <div id="hud-ammo"></div>
+      <div id="hud-clock"></div>
+      <div id="hud-minigame"></div>
       <div id="hud-speed"></div>
       <div id="hud-side"></div>
       <div id="hud-district"></div>
@@ -36,22 +39,29 @@
     </div>
     <canvas id="minimap" width="220" height="165" aria-label="Minimap of Costa Sol"></canvas>
   </div>
+  <div id="hud-dialog" class="hidden">
+    <div id="hud-dialog-name"></div>
+    <div id="hud-dialog-text"></div>
+    <div id="hud-dialog-hint">E / Click ▸</div>
+  </div>
   <div id="hud-banner"></div>
   <div id="hud-radio"></div>
-  <div id="hud-hint">WASD drive / walk &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; R radio &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
+  <div id="hud-hint">WASD drive / walk &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; 1–4 weapons &nbsp;·&nbsp; V vigilante &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; R radio &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute</div>
 </div>
 
 <div id="screen-title" class="screen">
   <div class="panel">
     <h1>COSTA SOL</h1>
     <p class="tagline">A sunny city. A heavy debt. One getaway driver.</p>
-    <p class="story">Lena Cruz drives for a living — and owes Marco Venn $2,000 for the last job that went wrong. Six jobs stand between her and a clean slate: fares, a borrowed coupe, a run from the law, a hot package, a quick score, and one last getaway to the harbour boat. The whole city is open: walk it, drive it, steal it.</p>
+    <p class="story">Lena Cruz drives for a living — and owes Marco Venn $2,000 for the last job that went wrong. Nine jobs stand between her and a clean slate: fares, a borrowed coupe, a run from the law, a hot package, a quick score, one last getaway — and then the reckoning: the van, the evidence, and Marco himself. The whole city is open: walk it, drive it, steal it. Day turns to night, districts fall under her control, and the streets offer races, vigilante chases and paramedic runs between jobs.</p>
     <div class="controls">
       <div><b>WASD / Arrows</b> — walk &amp; drive</div>
       <div><b>Shift</b> — run</div>
       <div><b>E</b> — enter / steal a car, pick up</div>
       <div><b>Mouse + Click</b> — aim &amp; shoot</div>
       <div><b>F</b> — punch</div>
+      <div><b>1–4</b> — pistol / shotgun / SMG / rifle</div>
+      <div><b>V</b> — start a vigilante chase (in a car, no heat)</div>
       <div><b>Space</b> — handbrake</div>
       <div><b>R</b> — radio station (in a car) / reload (on foot)</div>
       <div><b>P</b> — pause &nbsp; <b>M</b> — mute</div>
@@ -60,6 +70,9 @@
       <div><b class="taxi">TAXI</b> — pull up to a waiting fare in any car, press <b>E</b>, drop them off for $60+</div>
       <div><b class="pack">◆ Packages</b> — 8 hidden stashes around the city, $25 each on foot</div>
       <div><b class="jump">≫ Jumps</b> — cross an orange ramp faster than 100 km/h for $50</div>
+      <div><b class="race">🏁 Races</b> — $50 entry at the start line on the east avenue, $300 for the win</div>
+      <div><b class="guns">🔫 Guns</b> — orange pickups: shotgun, SMG, rifle; switch with 1–4</div>
+      <div><b class="night">🌙 Night</b> — the city darkens, lamps glow, and side work pays 1.25×</div>
     </div>
     <div class="buttons">
       <button id="btn-new" class="primary">New Game</button>
@@ -93,7 +106,7 @@
 
 <div id="screen-complete" class="screen hidden">
   <div class="panel">
-    <h1>DEBT PAID</h1>
+    <h1 id="complete-title">DEBT PAID</h1>
     <p id="complete-text" class="story"></p>
     <div class="buttons">
       <button id="btn-roam" class="primary">Keep playing — free roam</button>
