@@ -3,22 +3,30 @@
 // story complete. ?shot=cover|driving|mission|foot (with &seed=N) stages that
 // scene instead of running the loop, paints it twice and sets window.__shotReady.
 
-import { createCity, clamp, dist, isWaterAt, randomRoadPoint, WORLD_H, WORLD_W } from './city.js';
-import { createPlayer, updatePlayerOnFoot, playerPunch, playerShoot, hurtPlayer, healPlayer, resetPlayerTimers, knockPlayer, reloadWeapon, MAX_HEALTH, PUNCH_RANGE, PUNCH_DAMAGE } from './player.js';
-import { createCar, driveCar, updateTrafficCar, updatePoliceCar, separateCars, spawnTraffic, spawnParkedCars, spawnPoliceCar, createTaxi, CAR_RADIUS } from './vehicles.js';
-import { spawnPedestrians, updatePed, knockPedDown, scarePeds } from './pedestrians.js';
-import { createMissionState, startMission, updateMission, currentMission, currentObjective, missionTargetFor, resetMissionClean, nextMissionPreview, MISSIONS, DEBT_TOTAL } from './missions.js';
-import { createWanted, addWanted, setWanted, clearWanted, policeTargetCount, policeSpawnInterval, updateWanted } from './wanted.js';
+import { createCity, clamp, dist, isCircleBlockedAt, nearestFreePoint, randomRoadPoint, WORLD_H, WORLD_W } from './city.js';
+import { createPlayer, updatePlayerOnFoot, playerPunch, playerShoot, hurtPlayer, healPlayer, resetPlayerTimers, resetPlayerCombat, knockPlayer, reloadWeapon, playerWeaponAmmo, MAX_HEALTH, PLAYER_RADIUS, PUNCH_RANGE, PUNCH_DAMAGE } from './player.js';
+import { createCar, driveCar, updateTrafficCar, updatePoliceCar, separateCars, spawnTraffic, spawnParkedCars, spawnPoliceCar, spawnClassCar, createTaxi, CAR_RADIUS } from './vehicles.js';
+import { spawnPedestrians, updatePed, updateGangPed, spawnSpecialPeds, knockPedDown, scarePeds } from './pedestrians.js';
+import { createMissionState, startMission, updateMission, currentMission, currentObjective, missionTargetFor, resetMissionClean, nextMissionPreview, MISSIONS, ALL_MISSIONS, DEBT_TOTAL } from './missions.js';
+import { createWanted, addWanted, setWanted, clearWanted, policeTargetCount, policeSpawnInterval, updateWanted, createPoliceTactics, updatePoliceTactics, checkSpikeStrips, districtPatrolCount, raidSpawnInterval } from './wanted.js';
 import { createHud, updateHud, drawMinimap } from './hud.js';
 import { createAudio } from './audio.js';
-import { saveGame, loadSave, hasSave, clearSave, saveSummary } from './save.js';
+import { saveGame, loadSave, hasSave, clearSave, saveSummaryV4 } from './save.js';
 import { createRenderer } from './render.js';
-import { createParticlePool, spawnBurst, spawnParticle, spawnSmoke, updateParticles } from './particles.js';
+import { createParticlePool, spawnBurst, spawnParticle, spawnSmoke, spawnImpact, spawnConfetti, spawnMuzzle, spawnFireflies, spawnCashSparkle, updateParticles } from './particles.js';
 import {
   createSideState, updateSide, tryBoardTaxi, taxiArrived, collectPackageAt,
-  checkJump, sideSaveData, applySideSave, sideTotals, PACKAGE_REWARD, JUMP_REWARD,
+  checkJump, lastJumpPay, tickJumpClock, sideSaveData, applySideSave, sideTotals, PACKAGE_REWARD, JUMP_REWARD,
 } from './side.js';
 import { createWaitingPed } from './pedestrians.js';
+// v4 systems: the arsenal, the clock, the districts, the story's dialogue, the
+// minigames, and the second half of the story.
+import { createWeaponState, fireWeapon, currentWeaponStats, currentWeaponId, collectWeaponPickup, reloadCurrentWeapon, switchWeaponByKey, applyWeaponsSave } from './weapons.js';
+import { createClock, advanceClock, phaseName, isNight, fireflyPositions, trafficDensity, setClockMinutes, applyClockSave } from './daynight.js';
+import { createDistrictState, controlDistrict, controlledCount, updateDistricts, latestDistrictEvent, districtPoliceLevel, districtPoliceBonus, raidHere, applyDistrictsSave } from './districts.js';
+import { createDialogueState, missionBriefing, missionDebrief, updateDialogue, advanceDialogue, dialogueActive, applyDialoguesSave } from './cutscenes.js';
+import { createMinigameState, updateMinigames, tryRaceStart, tryVigilanteStart, tryMinigameInteract, minigameTotals, applyMinigamesSave, RACE_FIRST_PRIZE, RACE_SECOND_PRIZE } from './minigames.js';
+import { createMissions2State, updateMissions2, resetMissions2, applyMissions2Save } from './missions2.js';
 
 const STEP = 1 / 60;
 const MAX_FRAME = 0.25;
@@ -50,6 +58,7 @@ function rng() {
 function createGame() {
   const city = createCity(seed);
   const player = createPlayer(city.spawn.x, city.spawn.y);
+  player.weapons = createWeaponState();
   const cars = spawnTraffic(rng, TRAFFIC_TARGET, player.x, player.y);
   const parked = spawnParkedCars(rng, PARKED_COUNT);
   // The teal coupe mission 2 asks Lena to steal, parked by the west park.
@@ -63,18 +72,36 @@ function createGame() {
   // A guaranteed yellow cab one street over: the taxi side work is open
   // from the first minute, not something she has to hunt for.
   parked.push(createTaxi(3700, 2960, 0, rng));
+  // v4 fleet seeds: a motorcycle, a truck and a limo parked on roads near the
+  // spawn, so the new classes are drivable from the first minute.
+  parked.push(spawnClassCar(rng, 4000, 2960, 'motorcycle'));
+  parked.push(spawnClassCar(rng, 4000, 2960, 'truck'));
+  parked.push(spawnClassCar(rng, 4000, 2960, 'limo'));
   const game = {
     city, player,
     cars: cars.concat(parked),
     targetCar: target,
     police: [],
-    peds: spawnPedestrians(rng, PED_COUNT),
+    peds: spawnPedestrians(rng, PED_COUNT).concat(spawnSpecialPeds(rng, city)),
     bullets: [],
     // Particles live in one pre-allocated pool (no per-frame allocation),
     // and the side activities (taxi fares, hidden packages, stunt jumps)
     // keep their own state beside the missions.
     particles: createParticlePool(320),
     side: createSideState(city),
+    // v4 systems: the day-night clock, the districts, the dialogue box, the
+    // three minigames, the second half of the story, and police tactics.
+    clock: createClock(),
+    districts: createDistrictState(),
+    dialogue: createDialogueState(),
+    minigames: createMinigameState(),
+    missions2: createMissions2State(),
+    tactics: createPoliceTactics(),
+    pendingComplete: false, // mission 9 done: the complete screen waits for its debrief
+    fireflyTimer: 0,
+    frameNo: 0,
+    lastDistrictEvent: '',
+    raceBeepAt: -1,
     farePed: null, // the pedestrian waiting for a taxi, when one is out
     tireMarks: [],
     floatTexts: [],
@@ -157,6 +184,15 @@ window.addEventListener('keydown', (event) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
     return;
   }
+  // A dialogue open swallows E / Enter / Space: they advance the story, and
+  // nothing else (no car entry, no handbrake, no menu) happens on that press.
+  if (game.screen === 'play' && game.dialogue && dialogueActive(game.dialogue)
+    && (event.code === 'KeyE' || event.code === 'Enter' || event.code === 'Space')) {
+    advanceDialogue(game.dialogue);
+    audio.dialogBlip();
+    event.preventDefault();
+    return;
+  }
   keys.add(event.code);
   if (event.code === 'KeyE') {
     game.interactPressed = true;
@@ -164,6 +200,15 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.code === 'KeyF') tryPunch();
   if (event.code === 'KeyM') toggleMute();
+  if (event.code === 'KeyV') tryVigilante();
+  if (['Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)
+    && game.screen === 'play' && game.player.onFoot) {
+    const name = switchWeaponByKey(game.player, event.code);
+    if (name) {
+      announce(`${name} ready.`);
+      audio.click();
+    }
+  }
   if (event.code === 'KeyR') {
     if (game.screen === 'play' && !game.player.onFoot && game.player.car) {
       // In a car, R switches the radio station (on foot it reloads).
@@ -200,6 +245,12 @@ canvas.addEventListener('mousemove', (event) => {
 });
 canvas.addEventListener('mousedown', (event) => {
   if (event.button === 0) {
+    // A click on an open dialogue advances it instead of firing a shot.
+    if (game.screen === 'play' && game.dialogue && dialogueActive(game.dialogue)) {
+      advanceDialogue(game.dialogue);
+      audio.dialogBlip();
+      return;
+    }
     game.mouseDown = true;
     audio.ensure();
   }
@@ -235,6 +286,17 @@ function announce(message) {
   status.textContent = message;
 }
 
+/** Lena pressed V: start a vigilante chase when a red criminal car is near
+ * and the heat is off. Anywhere else, V does nothing. */
+function tryVigilante() {
+  if (game.screen !== 'play' || !game.minigames) return;
+  const ev = tryVigilanteStart(game.minigames, game);
+  if (ev === 'vigilante-start') {
+    audio.vigilanteBlip();
+    announce('Vigilante chase — ram the red car to a stop!');
+  }
+}
+
 function showScreen(name) {
   game.screen = name;
   for (const s of ['title', 'pause', 'over', 'complete']) {
@@ -247,7 +309,9 @@ function showScreen(name) {
 // ---------------------------------------------------------------- screens
 
 function startNewGame(continueSave) {
-  clearSave();
+  // New Game clears the save; Continue reads it first — clearing before the
+  // read used to wipe every Continue into a fresh game.
+  if (!continueSave) clearSave();
   const fresh = createGame();
   Object.assign(game, fresh);
   if (continueSave) {
@@ -260,11 +324,17 @@ function startNewGame(continueSave) {
       if (Array.isArray(save.completedIds)) game.missions.completedIds = [...save.completedIds];
       if (typeof save.radioStation === 'number') game.radioStation = save.radioStation;
       if (save.side) applySideSave(game.side, save.side);
+      if (save.weapons) applyWeaponsSave(game.player, save.weapons);
+      if (save.missions2) applyMissions2Save(game.missions2, save.missions2);
+      if (save.minigames) applyMinigamesSave(game.minigames, save.minigames);
+      if (save.clock) applyClockSave(game.clock, save.clock);
+      if (save.districts) applyDistrictsSave(game.districts, save.districts);
+      if (save.dialogues) applyDialoguesSave(game.dialogue, save.dialogues);
       if (save.missionDone) {
         game.missions.done = true;
-        game.missions.index = MISSIONS.length;
+        game.missions.index = ALL_MISSIONS.length;
       } else {
-        startMission(game.missions, Math.min(save.missionIndex, MISSIONS.length - 1));
+        startMission(game.missions, Math.min(save.missionIndex, ALL_MISSIONS.length - 1));
       }
       announce('Continuing your story.');
     }
@@ -272,6 +342,9 @@ function startNewGame(continueSave) {
   showScreen('play');
   announce('Costa Sol. Mission 1: pick up the fare. Find a car — press E near one.');
   audio.ensure();
+  // The story opens with its first briefing (once per game).
+  const cur = currentMission(game.missions);
+  if (cur) missionBriefing(game.dialogue, cur.id);
 }
 
 function pauseGame() {
@@ -294,6 +367,19 @@ function togglePause() {
 function resumeFreeRoam() {
   showScreen('play');
   announce('Free roam. The city is yours.');
+}
+
+/** The story is over: nine jobs done, Marco Venn finished. The full ledger —
+ * story money, side work, minigames, districts — in one line. */
+function showCompleteScreen() {
+  showScreen('complete');
+  const side = sideTotals(game.side);
+  const mg = game.minigames ? minigameTotals(game.minigames) : null;
+  const districts = game.districts ? controlledCount(game.districts) : 0;
+  const title = document.getElementById('complete-title');
+  if (title) title.textContent = 'COSTA SOL COMPLETE';
+  document.getElementById('complete-text').textContent = `Nine jobs done. Marco Venn is finished, and Costa Sol is Lena's. Final take: $${game.money} (story $4300 · side work: $${side.earned} from ${side.fares} fares, ${side.packages} packages, ${side.jumps} jumps${mg ? ` · races won ${mg.racesWon}/${mg.racesRun}, vigilante ${mg.vigilanteKills}, patients ${mg.patientsSaved}` : ''} · ${districts}/8 districts controlled).`;
+  audio.jingle();
 }
 
 /** Lena is busted or wasted: lose some cash, wake up at the hospital, retry the mission. */
@@ -327,6 +413,7 @@ function respawn() {
   game.player.car = null;
   game.player.ammo = 12;
   resetPlayerTimers(game.player);
+  resetPlayerCombat(game.player);
   audio.radioStop();
   game.radioBanner = 0;
   // A fare does not survive a bust or a hospital trip: the passenger walks
@@ -342,6 +429,7 @@ function respawn() {
   // Clean mission retry: no duplicated NPCs, cars or timers, and the mission
   // car is back on the map if it was lost.
   resetMissionClean(game.missions);
+  resetMissions2(game.missions2, game);
   ensureTargetCar();
   // The coupe must be stealable again after a bust: its takenByPlayer flag
   // survives the respawn, so re-entering it never sets stolenTarget and the
@@ -360,7 +448,7 @@ function nearestCar(maxDist) {
   let best = null;
   let bestD = maxDist;
   for (const car of game.cars) {
-    if (car.dead || car.kind === 'police') continue;
+    if (car.dead || car.kind === 'police' || car.noSteal) continue;
     const d = dist(game.player.x, game.player.y, car.x, car.y);
     if (d < bestD) { bestD = d; best = car; }
   }
@@ -408,6 +496,11 @@ function tryEnterCar() {
     announce(wasTarget ? 'That is the coupe. Get it to Sol Garage.' : 'Car taken. Drive.');
   }
   if (car.kind === 'taxi') announce('Taxi — fares pay cash. Look for the green TAXI pin.');
+  if (car === game.missions2.van) {
+    game.missions2.vanStolen = true;
+    announce('The van is yours. Get it to Sol Garage — fast.');
+  }
+  if (car.kind === 'ambulance') announce('Ambulance — the paramedic job is live. Find the patient.');
   audio.ensure();
   audio.radioStart(game.radioStation);
   game.radioName = audio.radioStations()[game.radioStation] || 'COSTA SYNTHWAVE';
@@ -454,10 +547,34 @@ function tryPunch() {
 function tryShoot() {
   if (!game.player.onFoot || game.mouseDown === false) return;
   const world = screenToWorld(game.mouseX, game.mouseY);
-  const bullet = playerShoot(game.player, world.x, world.y);
-  if (!bullet) return;
-  game.bullets.push(bullet);
-  audio.shoot();
+  let bullets = null;
+  if (game.player.weapons) {
+    // The arsenal: fire the gun in hand (one bullet per pellet), play its
+    // own sound, and throw a muzzle puff for the big guns. An empty magazine
+    // clicks dry — fireWeapon already dropped her back to the pistol.
+    const ammoBefore = playerWeaponAmmo(game.player);
+    bullets = fireWeapon(game.player, world.x, world.y);
+    if (!bullets) {
+      if (ammoBefore <= 0) audio.dryFire();
+      return;
+    }
+    const st = currentWeaponStats(game.player);
+    if (st.sound === 'shotgun') audio.shotgun();
+    else if (st.sound === 'smg') audio.smg();
+    else if (st.sound === 'rifle') audio.rifle();
+    else audio.shoot();
+    if (st.pellets > 1 || st.damage >= 60) {
+      const mx = game.player.x + Math.cos(game.player.angle) * 26;
+      const my = game.player.y + Math.sin(game.player.angle) * 26;
+      spawnMuzzle(game.particles, mx, my, st.muzzle);
+    }
+  } else {
+    const b = playerShoot(game.player, world.x, world.y);
+    if (!b) return;
+    bullets = [b];
+    audio.shoot();
+  }
+  for (const b of bullets) game.bullets.push(b);
   renderer.addShake(0.12);
   scarePeds(game.peds, game.player.x, game.player.y, 420);
   if (copNearby(800)) commitCrime(1);
@@ -534,7 +651,7 @@ function bulletHitsCar(b, car) {
   car.health -= b.damage;
   if (car.kind === 'police') commitCrime(1);
   else if (copNearby(700)) commitCrime(1);
-  spawnParticles(b.x, b.y, '#ffd23c', 5, 80);
+  spawnImpact(game.particles, b.x, b.y, b.color || '#ffd23c');
   return true;
 }
 
@@ -606,23 +723,167 @@ function removeFarePed() {
   game.farePed = null;
 }
 
+/** Announce a minigame event and play its sound. The money is already paid
+ * where the event says so; this only tells the player what happened. */
+function handleMinigameEvent(ev) {
+  switch (ev) {
+    case 'race-start':
+      announce('Race on! Hold still for the lights…');
+      audio.raceBeep(false);
+      break;
+    case 'race-go':
+      announce('GO!');
+      audio.raceBeep(true);
+      break;
+    case 'race-win':
+      audio.raceWin();
+      spawnConfetti(game.particles, game.player.x, game.player.y - 20, 40);
+      addFloatText(game.player.x, game.player.y - 44, `RACE WIN +$${RACE_FIRST_PRIZE}`, '#ffd23c', 22);
+      announce(`First place — +$${RACE_FIRST_PRIZE}!`);
+      break;
+    case 'race-second':
+      audio.cash();
+      addFloatText(game.player.x, game.player.y - 44, `2ND PLACE +$${RACE_SECOND_PRIZE}`, '#c8c8d8', 20);
+      announce(`Second — +$${RACE_SECOND_PRIZE}.`);
+      break;
+    case 'race-lose':
+      announce('Out of the money. The $50 is gone.');
+      break;
+    case 'race-timeout':
+      announce('Race timed out.');
+      break;
+    case 'race-false-start':
+      announce('False start! The $50 stays with the house.');
+      break;
+    case 'race-cancelled':
+      announce('Race cancelled.');
+      break;
+    case 'vigilante-start':
+      audio.vigilanteBlip();
+      announce('Vigilante chase — ram the red car to a stop!');
+      break;
+    case 'vigilante-kill':
+      audio.cash();
+      announce('Criminal stopped. The city pays.');
+      break;
+    case 'vigilante-failed':
+      announce('The criminal got away.');
+      break;
+    case 'paramedic-start':
+      audio.ambulanceBlip();
+      announce('Paramedic run — pick up the patient, bring them to the hospital.');
+      break;
+    case 'patient-pickup':
+      audio.ambulanceBlip();
+      announce('Patient aboard — to the hospital, fast!');
+      break;
+    case 'paramedic-saved':
+      audio.cash();
+      announce('Patient saved.');
+      break;
+    case 'paramedic-cancelled':
+      announce('Paramedic run cancelled.');
+      break;
+    case 'paramedic-timeout':
+      announce('Too slow — the patient was picked up by someone else.');
+      break;
+    default:
+      break;
+  }
+}
+
 // ---------------------------------------------------------------- the step
 
 function stepWorld(dt) {
   const player = game.player;
+  // A dialogue open pauses the world: only the typewriter steps, so a
+  // briefing can never be talked over by a police chase.
+  if (game.dialogue && dialogueActive(game.dialogue)) {
+    updateDialogue(game.dialogue, dt);
+    return;
+  }
   game.elapsed += dt;
   if (game.crimeCooldown > 0) game.crimeCooldown -= dt;
   if (game.carCrashCooldown > 0) game.carCrashCooldown -= dt;
   if (reloadTimer > 0) {
     reloadTimer -= dt;
     if (reloadTimer <= 0) {
-      reloadWeapon(player);
-      audio.click();
+      if (game.player.weapons) {
+        reloadCurrentWeapon(player);
+        audio.reloadSound();
+      } else {
+        reloadWeapon(player);
+        audio.click();
+      }
     }
   }
   if (game.missions.banner > 0) game.missions.banner -= dt;
   if (game.radioBanner > 0) game.radioBanner -= dt;
   if (!player.onFoot && player.car) audio.radioTick();
+
+  // --- the day turns: clock, phase sting, district raids
+  if (game.clock) {
+    const phase = advanceClock(game.clock, dt);
+    if (phase) {
+      audio.phaseSting(phase);
+      announce(`${phaseName(game.clock)} falls over Costa Sol.`);
+    }
+  }
+  if (game.districts) {
+    updateDistricts(game.districts, game, dt);
+    const ev = latestDistrictEvent(game.districts);
+    if (ev && ev !== game.lastDistrictEvent) {
+      game.lastDistrictEvent = ev;
+      announce(ev);
+      if (ev.startsWith('POLICE RAID')) audio.sting();
+    }
+  }
+  if (game.minigames) {
+    const mgEvent = updateMinigames(game.minigames, game, dt);
+    if (mgEvent) handleMinigameEvent(mgEvent);
+    // Race countdown beeps: one per whole second, GO on the last.
+    const race = game.minigames.race;
+    if (race.phase === 'countdown') {
+      const whole = Math.ceil(race.countdown);
+      if (whole !== game.raceBeepAt && whole > 0) {
+        game.raceBeepAt = whole;
+        audio.raceBeep(false);
+      }
+    }
+  }
+  if (game.missions2) updateMissions2(game.missions2, game, dt);
+  if (game.tactics) {
+    const tacEvent = updatePoliceTactics(game.tactics, game, dt);
+    if (tacEvent === 'roadblock') {
+      announce('ROADBLOCK ahead — two cruisers across the road!');
+      audio.sting();
+    } else if (tacEvent === 'spikes') {
+      announce('Spike strip ahead — slow down!');
+    }
+    if (checkSpikeStrips(game.tactics, game)) {
+      addFloatText(player.x, player.y - 40, 'TYRES SHREDDED!', '#ff7070', 18);
+      audio.crash();
+      renderer.addShake(0.5);
+    }
+  }
+  // Night fireflies over the park, one small puff every half second.
+  if (game.clock && isNight(game.clock)) {
+    game.fireflyTimer -= dt;
+    if (game.fireflyTimer <= 0) {
+      game.fireflyTimer = 0.5;
+      game.frameNo += 1;
+      spawnFireflies(game.particles, fireflyPositions(game.clock, game.frameNo * 30, game.city.park));
+    }
+  }
+  // Weapon pickups: walk over a gun to take it.
+  if (player.onFoot && player.weapons) {
+    const got = collectWeaponPickup(player);
+    if (got) {
+      audio.pickup();
+      addFloatText(player.x, player.y - 34, `${got} — press 1-4 to switch`, '#ff8c28', 16);
+      announce(`Picked up the ${got}.`);
+    }
+  }
 
   // --- input direction
   const mx = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
@@ -642,19 +903,34 @@ function stepWorld(dt) {
       missionAction = dist(px, py, obj.x, obj.y) < obj.r;
     } else if (obj && obj.type === 'rob' && player.onFoot) {
       missionAction = dist(player.x, player.y, obj.x, obj.y) < obj.r;
+    } else if (obj && obj.type === 'final' && player.onFoot) {
+      // Mission 9's ending: on foot at the stopped sedan, E ends the story —
+      // it must not open a car door instead.
+      missionAction = dist(player.x, player.y, obj.x, obj.y) < obj.r;
     }
     if (!missionAction) {
       game.interactPressed = false;
-      if (!player.onFoot) {
-        // A fare waiting by the road boards before E means "get out": pull
-        // up next to the green TAXI pin and the passenger climbs in.
-        const fare = tryBoardTaxi(game.side, game, player.x, player.y);
-        if (fare > 0) {
-          removeFarePed();
-          audio.taxiBlip();
-          announce(`Fare aboard — drop them off for $${fare}.`);
+      // The minigames' E action (patient pickup) comes before car entry.
+      const mgAct = game.minigames ? tryMinigameInteract(game.minigames, game) : null;
+      if (mgAct === 'patient-pickup') {
+        handleMinigameEvent(mgAct);
+      } else if (!player.onFoot) {
+        // A race starts from the line, in a car, with $50 — E there is the
+        // entry fee, not the door handle.
+        const raceEv = game.minigames ? tryRaceStart(game.minigames, game) : null;
+        if (raceEv) {
+          handleMinigameEvent(raceEv);
         } else {
-          exitCar();
+          // A fare waiting by the road boards before E means "get out": pull
+          // up next to the green TAXI pin and the passenger climbs in.
+          const fare = tryBoardTaxi(game.side, game, player.x, player.y);
+          if (fare > 0) {
+            removeFarePed();
+            audio.taxiBlip();
+            announce(`Fare aboard — drop them off for $${fare}.`);
+          } else {
+            exitCar();
+          }
         }
       } else {
         tryEnterCar();
@@ -709,16 +985,17 @@ function stepWorld(dt) {
       player.health = Math.max(1, player.health - 20);
       player.car = null;
       player.onFoot = true;
-      // Eject onto dry land: a wreck at the harbour edge must not drop Lena
-      // into the water, where the no-swimming rule would freeze her in place
-      // while the police close in.
+      // Eject onto open ground: a wreck at the harbour edge must not drop
+      // Lena into the water, and a wreck against a building face must not
+      // drop her inside the building — on foot she can never walk out of a
+      // wall she starts inside (the step retries revert to the trapped
+      // spot), so the eject point itself must be free, not just dry.
       let ex = car.x + 40;
       let ey = car.y;
-      if (isWaterAt(game.city, ex, ey)) {
-        const options = [[car.x - 40, car.y], [car.x, car.y - 40], [car.x, car.y + 40], [car.x, car.y]];
-        for (const [ox, oy] of options) {
-          if (!isWaterAt(game.city, ox, oy)) { ex = ox; ey = oy; break; }
-        }
+      if (isCircleBlockedAt(game.city, ex, ey, PLAYER_RADIUS)) {
+        const free = nearestFreePoint(game.city, ex, ey, PLAYER_RADIUS);
+        ex = free.x;
+        ey = free.y;
       }
       player.x = ex;
       player.y = ey;
@@ -734,7 +1011,10 @@ function stepWorld(dt) {
 
   // --- pedestrians
   const danger = game.mouseDown && player.onFoot ? { x: player.x, y: player.y, r: 420 } : null;
-  for (const ped of game.peds) updatePed(ped, dt, game.city, rng, danger);
+  for (const ped of game.peds) {
+    if (ped.gang) updateGangPed(ped, dt, game.city, rng);
+    else updatePed(ped, dt, game.city, rng, danger);
+  }
 
   // --- traffic
   for (const car of game.cars) {
@@ -744,7 +1024,9 @@ function stepWorld(dt) {
   if (game.trafficTimer <= 0) {
     game.trafficTimer = 2;
     const traffic = game.cars.filter((c) => c.kind === 'traffic' && !c.dead);
-    if (traffic.length < TRAFFIC_TARGET) {
+    // Night streets are quieter: the traffic target scales with the clock.
+    const trafficTarget = Math.max(6, Math.round(TRAFFIC_TARGET * (game.clock ? trafficDensity(game.clock) : 1)));
+    if (traffic.length < trafficTarget) {
       const p = randomRoadPoint(rng, player.x, player.y, 600);
       const car = createCar(p.x, p.y, 0, 'traffic', rng);
       game.cars.push(car);
@@ -797,15 +1079,20 @@ function stepWorld(dt) {
 
   // --- wanted and police
   const pos = { x: player.x, y: player.y };
-  const wantedEvent = updateWanted(game.wanted, dt, pos, game.police, game.city.hideout);
+  // A raid where Lena stands means faster cruisers and slower cooling.
+  const raidHereNow = game.districts ? raidHere(game.districts, pos.x, pos.y) : false;
+  const wantedEvent = updateWanted(game.wanted, dt, pos, game.police, game.city.hideout, raidHereNow);
   if (wantedEvent === 'hidden') announce('Lost them in the garage. The heat is off.');
   else if (wantedEvent === 'cooled' && game.wanted.level === 0) announce('The heat died down.');
 
   game.policeTimer -= dt;
-  const targetCops = policeTargetCount(game.wanted.level);
+  // Hot districts field extra cruisers on top of the wanted level's own.
+  const targetCops = policeTargetCount(game.wanted.level)
+    + (game.districts ? districtPatrolCount(game.wanted.level, districtPoliceLevel(pos.x, pos.y)) : 0)
+    + (game.districts ? districtPoliceBonus(game.districts, pos.x, pos.y) : 0);
   if (game.policeTimer <= 0) {
-    // Hotter heat brings cruisers faster (v3 wanted tuning).
-    game.policeTimer = policeSpawnInterval(game.wanted.level);
+    // Hotter heat brings cruisers faster (v3 wanted tuning); a raid faster still.
+    game.policeTimer = raidHereNow ? raidSpawnInterval(game.wanted.level) : policeSpawnInterval(game.wanted.level);
     const alive = game.police.filter((c) => !c.dead);
     if (alive.length < targetCops) {
       game.police.push(spawnPoliceCar(rng, player.x, player.y));
@@ -834,20 +1121,35 @@ function stepWorld(dt) {
       audio.jingle();
       addFloatText(player.x, player.y - 44, `+$${done.reward}`, '#7de89a', 22);
       addFloatText(player.x, player.y - 70, 'MISSION COMPLETE', '#ffd23c', 18);
+      spawnCashSparkle(game.particles, player.x, player.y - 20);
       saveGame(game);
+      // The district where the job ended comes under Lena's control.
+      if (game.districts) {
+        const controlled = controlDistrict(game.districts, player.x, player.y);
+        if (controlled) {
+          audio.districtChime();
+          announce(`${controlled} is under Lena's control now.`);
+        }
+      }
+      // The story talks back: the outro of the finished job, then the intro
+      // of the next one (the dialogue queue plays them in order).
+      missionDebrief(game.dialogue, done.id);
+      if (done.id === 'heatwave' && game.missions2) game.missions2.lockdown = false;
       const next = nextMissionPreview(game.missions);
       announce(next
         ? `${done.title} complete — +$${done.reward}. Next: ${next.title} ($${next.reward}).`
         : `${done.title} complete — +$${done.reward}.`);
       // The next job may need wheels: never start it stranded on foot with
       // no car in reach.
-      if (!game.missions.done) ensureCarNear(player.x, player.y);
+      if (!game.missions.done) {
+        ensureCarNear(player.x, player.y);
+        if (next) missionBriefing(game.dialogue, next.id);
+      }
       if (game.missions.index === 1) ensureTargetCar(); // mission 2 needs its coupe
       if (game.missions.done) {
-        showScreen('complete');
-        const side = sideTotals(game.side);
-        document.getElementById('complete-text').textContent = `The debt is paid. Lena is free — and Costa Sol is hers. Final take: $${game.money} (side work: $${side.earned} from ${side.fares} fares, ${side.packages} packages, ${side.jumps} jumps).`;
-        audio.jingle();
+        // The last line of the story plays first; the complete screen waits
+        // for the dialogue to close (see the pendingComplete check below).
+        game.pendingComplete = true;
       }
     }
   } else if (missionEvent === 'failed') {
@@ -855,8 +1157,15 @@ function stepWorld(dt) {
     // Retry clean: fresh timer, the mission car back on the map, a ride
     // nearby, and no leftover state from the failed attempt.
     resetMissionClean(game.missions);
+    resetMissions2(game.missions2, game);
     ensureTargetCar();
     ensureCarNear(player.x, player.y);
+  }
+  // The story is over: once the final debrief has played out, show the
+  // complete screen with the full ledger.
+  if (game.pendingComplete && !dialogueActive(game.dialogue)) {
+    game.pendingComplete = false;
+    showCompleteScreen();
   }
   // Mission 6 opens with the whole city on her tail; the robbery arms three stars.
   if (game.missions.index === 5 && game.missions.objective === 0 && game.wanted.level < 4) setWanted(game.wanted, 4);
@@ -870,6 +1179,7 @@ function stepWorld(dt) {
   updateParticles(game.particles, dt);
 
   // --- side work: taxi fares, hidden packages, stunt jumps
+  tickJumpClock(game.side, game.elapsed);
   const sideEvent = updateSide(game.side, game, dt);
   if (sideEvent === 'fare-waiting') {
     const t = game.side.taxi;
@@ -885,7 +1195,7 @@ function stepWorld(dt) {
     announce('Too slow — the fare walked off.');
   }
   if (player.onFoot) {
-    const found = collectPackageAt(game.side, player.x, player.y);
+    const found = collectPackageAt(game.side, player.x, player.y, game.clock, game.districts);
     if (found > 0) {
       game.money += found;
       audio.cash();
@@ -895,13 +1205,15 @@ function stepWorld(dt) {
   } else if (player.car) {
     const jumpSpeed = checkJump(game.side, player.car);
     if (jumpSpeed > 0) {
-      game.money += JUMP_REWARD;
+      // The payout is the combo + district total, not the flat $50.
+      const pay = lastJumpPay(game.side);
+      game.money += pay;
       audio.jumpWhoosh();
       renderer.addShake(0.5);
-      addFloatText(player.x, player.y - 44, `STUNT JUMP! +$${JUMP_REWARD}`, '#ff8c28', 20);
-      announce(`Stunt jump at ${Math.round(jumpSpeed * 0.24)} km/h — +$${JUMP_REWARD}.`);
+      addFloatText(player.x, player.y - 44, `STUNT JUMP! +$${pay}`, '#ff8c28', 20);
+      announce(`Stunt jump at ${Math.round(jumpSpeed * 0.24)} km/h — +$${pay}.`);
     }
-    const farePay = taxiArrived(game.side, player.x, player.y);
+    const farePay = taxiArrived(game.side, player.x, player.y, game.clock, game.districts);
     if (farePay > 0) {
       game.money += farePay;
       audio.cash();
@@ -1026,17 +1338,17 @@ function stageShot(name) {
   showScreen('play');
   game.screen = 'play';
   if (name === 'cover') {
-    // The chase: wanted 3, two cruisers on her tail, traffic ahead, mission 3.
-    stageInCar(1400, 1400, 0, 480);
-    game.missions.index = 2;
-    startMission(game.missions, 2);
-    game.missions.objective = 1;
-    game.missions.timer = 132;
-    setWanted(game.wanted, 3);
-    const cop1 = spawnPoliceCar(rng, 1400, 1400);
-    cop1.x = 1180; cop1.y = 1330; cop1.angle = 0; cop1.speed = 520;
-    const cop2 = spawnPoliceCar(rng, 1400, 1400);
-    cop2.x = 1120; cop2.y = 1480; cop2.angle = 0; cop2.speed = 500;
+    // The final chase: Marco's sedan ahead, wanted 4, cruisers on her tail,
+    // sunset light over the avenues — mission 9 in one frame.
+    setClockMinutes(game.clock, 1150);
+    stageInCar(1800, 1400, 0, 480);
+    startMission(game.missions, 8);
+    updateMissions2(game.missions2, game, 0); // spawns Marco's sedan
+    setWanted(game.wanted, 4);
+    const cop1 = spawnPoliceCar(rng, 1800, 1400);
+    cop1.x = 1560; cop1.y = 1330; cop1.angle = 0; cop1.speed = 520;
+    const cop2 = spawnPoliceCar(rng, 1800, 1400);
+    cop2.x = 1500; cop2.y = 1480; cop2.angle = 0; cop2.speed = 500;
     game.police.push(cop1, cop2);
     // Traffic on the parallel streets, in frame but out of her lane.
     const ahead1 = createCar(1900, 1780, 0, 'traffic', rng);
@@ -1045,36 +1357,44 @@ function stageShot(name) {
     game.cars.push(ahead1, ahead2, ahead3);
     simulateDrive(3, 4200, 1400, { axis: 'h', line: 1400, dir: 1 });
   } else if (name === 'driving') {
-    // Cruising the avenue with traffic, mission 1 waiting for its pickup.
-    stageInCar(2200, 900, Math.PI / 2, 340);
+    // Street race: three rivals on the line, the countdown done, Lena pulling
+    // away up avenue 2200 with the pack behind her.
+    setClockMinutes(game.clock, 600);
+    stageInCar(2200, 2780, -Math.PI / 2, 0);
+    game.money = 500;
     startMission(game.missions, 0);
-    // Traffic on the parallel avenues, in frame beside her.
-    const t1 = createCar(1800, 1300, Math.PI / 2, 'traffic', rng);
-    const t2 = createCar(2600, 1700, Math.PI / 2, 'traffic', rng);
-    const t3 = createCar(1800, 2100, Math.PI / 2, 'traffic', rng);
-    game.cars.push(t1, t2, t3);
-    simulateDrive(2, 2200, 2600, { axis: 'v', line: 2200, dir: 1 });
+    tryRaceStart(game.minigames, game);
+    game.minigames.race.phase = 'running';
+    game.minigames.race.countdown = 0;
+    simulateDrive(2, 2200, 1400, { axis: 'v', line: 2200, dir: -1 });
   } else if (name === 'mission') {
-    // The hot package: 62 seconds left, foot down toward the north marina.
-    stageInCar(1800, 1800, 0, 460);
-    startMission(game.missions, 3);
-    game.missions.objective = 1;
-    game.missions.timer = 62;
-    game.money = 540;
+    // Heat Wave: five stars, night, the evidence run to the lawyer — a cruiser
+    // closing in behind her on the north road.
+    setClockMinutes(game.clock, 1320);
+    stageInCar(1400, 900, Math.PI / 2, 460);
+    startMission(game.missions, 7);
+    game.missions.objective = 2;
+    game.missions.timer = 120;
+    game.money = 1540;
+    setWanted(game.wanted, 5);
+    const cop = spawnPoliceCar(rng, 1400, 900);
+    cop.x = 1400; cop.y = 700; cop.angle = Math.PI / 2; cop.speed = 520;
+    game.police.push(cop);
     // Traffic on the parallel streets, in frame but out of her lane.
     const t1 = createCar(2400, 2200, 0, 'traffic', rng);
     const t2 = createCar(3000, 1400, 0, 'traffic', rng);
     game.cars.push(t1, t2);
-    simulateDrive(2.5, 4400, 1800, { axis: 'h', line: 1800, dir: 1 });
+    simulateDrive(2, 4400, 600, { axis: 'h', line: 600, dir: 1 });
   } else {
-    // On foot by the north plaza, pedestrians strolling, mission 1 still open
-    // — and a hidden package glinting by the fountain, so the frame shows
-    // the side work too.
+    // On foot at night by the north plaza, a shotgun pickup glinting nearby,
+    // pedestrians strolling, and the mission 7 briefing open — the story, the
+    // arsenal and the night in one frame.
+    setClockMinutes(game.clock, 1260);
     game.player.x = 1240;
     game.player.y = 900;
     game.player.onFoot = true;
     game.player.angle = -Math.PI / 2;
-    startMission(game.missions, 0);
+    startMission(game.missions, 6);
     // Pull a few pedestrians onto the sidewalks around her, so the frame
     // shows the city's people, not just its streets.
     const nearSpots = [[1170, 820], [1310, 840], [1150, 960], [1330, 980], [1240, 780], [1100, 900]];
@@ -1085,6 +1405,11 @@ function stageShot(name) {
       game.peds[i].ty = nearSpots[i][1];
     }
     for (let i = 0; i < 300; i += 1) stepWorld(STEP);
+    missionBriefing(game.dialogue, 'score2');
+    // The staged frame never runs the loop, so the typewriter would leave
+    // the box empty: finish the first line at once, so the shot shows the
+    // briefing instead of a blank box.
+    advanceDialogue(game.dialogue);
   }
   // The autopilot's job is done; clear its input so nothing leaks past the shot.
   game.autoSteer = undefined;
@@ -1117,7 +1442,7 @@ if (!hasSave()) {
   if (b) b.style.display = 'none';
 } else {
   const b = document.getElementById('btn-continue');
-  const summary = saveSummary();
+  const summary = saveSummaryV4();
   if (b && summary) b.textContent = summary;
 }
 showScreen('title');

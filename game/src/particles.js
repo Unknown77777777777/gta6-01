@@ -62,6 +62,62 @@ export function spawnSmoke(pool, x, y, count, heavy) {
   }
 }
 
+// ------------------------------------------------- v4 particle effects
+
+/** A weapon impact: yellow sparks that fly fast and die fast, plus one small
+ * grey puff where the round landed. Called by the bullet code. */
+export function spawnImpact(pool, x, y, color) {
+  spawnBurst(pool, x, y, color || '#ffd23c', 7, 150, 0.35, 2.2, 0);
+  spawnParticle(pool, x, y, (Math.random() - 0.5) * 20, -30, 0.6, 5, '#bdbdbd', -10);
+}
+
+/** Race confetti: a burst of bright coloured squares that fall slowly and
+ * spin — the finish line, in particles. Colours cycle the rainbow. */
+export function spawnConfetti(pool, x, y, count) {
+  const colors = ['#ffd23c', '#ff5a8a', '#58d878', '#4a90d8', '#c86ae8', '#ff8c28'];
+  for (let i = 0; i < count; i += 1) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 60 + Math.random() * 160;
+    spawnParticle(pool, x, y, Math.cos(a) * s, Math.sin(a) * s - 60,
+      1.2 + Math.random() * 0.8, 3 + Math.random() * 2,
+      colors[i % colors.length], 60);
+  }
+}
+
+/** An ambulance trail: small white crosses that sparkle and fade behind the
+ * ambulance while it carries a patient — the city can see the hurry. */
+export function spawnAmbulanceTrail(pool, x, y) {
+  spawnParticle(pool, x + (Math.random() - 0.5) * 16, y + (Math.random() - 0.5) * 16,
+    (Math.random() - 0.5) * 20, -20 - Math.random() * 20,
+    0.7, 3, '#ffffff', 0);
+  if (Math.random() < 0.4) {
+    spawnParticle(pool, x, y, 0, -40, 0.5, 2, '#ff6a6a', 0);
+  }
+}
+
+/** Night fireflies over the park: slow amber dots that drift and pulse. The
+ * positions come from daynight.js; this file only lights them. */
+export function spawnFireflies(pool, positions) {
+  for (const f of positions) {
+    spawnParticle(pool, f.x, f.y, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12,
+      0.9, 2.5, '#ffe27a', 0);
+  }
+}
+
+/** A muzzle flash puff for the big guns: a short orange bloom at the barrel. */
+export function spawnMuzzle(pool, x, y, color) {
+  spawnBurst(pool, x, y, color || '#ffe27a', 5, 90, 0.18, 3, 0);
+}
+
+/** A cash sparkle: green-gold dots that rise when a job pays out. */
+export function spawnCashSparkle(pool, x, y) {
+  for (let i = 0; i < 8; i += 1) {
+    spawnParticle(pool, x + (Math.random() - 0.5) * 30, y + (Math.random() - 0.5) * 10,
+      (Math.random() - 0.5) * 40, -50 - Math.random() * 40,
+      0.8, 2.5, i % 2 === 0 ? '#7de89a' : '#ffd23c', -20);
+  }
+}
+
 /** Step every live particle: move it, age it, kill it when its life runs out. */
 export function updateParticles(pool, dt) {
   for (const p of pool.slots) {

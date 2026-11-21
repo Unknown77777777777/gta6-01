@@ -334,5 +334,87 @@ export function createAudio() {
       tone(392, 392, 0.3, 0.2, 'triangle');
       tone(311, 233, 0.6, 0.2, 'triangle', 0.28);
     },
+
+    // ------------------------------------------------- v4 weapon sounds
+
+    /** Shotgun: a low noise burst with a heavy thump underneath it. */
+    shotgun() {
+      noiseBurst(0.22, 700, 0.6, 'lowpass');
+      tone(120, 45, 0.2, 0.35, 'sine');
+    },
+
+    /** SMG: a short rapid blip — one per bullet, cheap enough to fire fast. */
+    smg() {
+      noiseBurst(0.07, 2600, 0.35, 'highpass');
+      tone(240, 120, 0.06, 0.18, 'square');
+    },
+
+    /** Rifle: a sharp crack — high noise, fast decay, a snap of tone. */
+    rifle() {
+      noiseBurst(0.16, 3200, 0.55, 'highpass');
+      tone(320, 90, 0.14, 0.3, 'sawtooth');
+    },
+
+    /** A dry click when a magazine is empty (the cue to switch guns). */
+    dryFire() {
+      tone(1200, 900, 0.04, 0.12, 'square');
+    },
+
+    /** A metallic reload clack, two parts: magazine out, magazine in. */
+    reloadSound() {
+      tone(500, 300, 0.06, 0.14, 'square');
+      tone(700, 500, 0.06, 0.14, 'square', 0.12);
+    },
+
+    // ------------------------------------------------- v4 race & event sounds
+
+    /** One countdown beep (3-2-1): short, bright, the same every time. */
+    raceBeep(final) {
+      tone(final ? 1320 : 880, final ? 1320 : 880, final ? 0.35 : 0.14, 0.2, 'square');
+    },
+
+    /** A race win jingle: five rising notes, faster than the mission one. */
+    raceWin() {
+      const notes = [523, 659, 784, 1047, 1319];
+      for (let i = 0; i < notes.length; i += 1) tone(notes[i], notes[i], 0.18, 0.18, 'triangle', i * 0.09);
+    },
+
+    /** A short sting when the day turns — dawn, sunset, night. Two notes that
+     * rise at dawn and fall at night: the city changing its mind. */
+    phaseSting(phase) {
+      if (phase === 'night') {
+        tone(392, 392, 0.25, 0.16, 'sine');
+        tone(311, 262, 0.4, 0.16, 'sine', 0.22);
+      } else if (phase === 'sunset') {
+        tone(330, 330, 0.22, 0.16, 'sine');
+        tone(392, 392, 0.3, 0.16, 'sine', 0.2);
+      } else {
+        tone(262, 262, 0.22, 0.16, 'sine');
+        tone(392, 523, 0.35, 0.16, 'sine', 0.2);
+      }
+    },
+
+    /** A two-tone vigilante siren blip when a chase starts. */
+    vigilanteBlip() {
+      tone(950, 950, 0.12, 0.16, 'square');
+      tone(700, 700, 0.12, 0.16, 'square', 0.13);
+    },
+
+    /** A soft typewriter blip while dialogue types itself out. */
+    dialogBlip() {
+      tone(1100, 1100, 0.03, 0.06, 'sine');
+    },
+
+    /** A warm two-note chime when a district comes under Lena's control. */
+    districtChime() {
+      tone(659, 659, 0.16, 0.16, 'triangle');
+      tone(880, 880, 0.24, 0.16, 'triangle', 0.14);
+    },
+
+    /** A short ambulance two-tone, for the paramedic pickup. */
+    ambulanceBlip() {
+      tone(780, 780, 0.16, 0.14, 'sine');
+      tone(620, 620, 0.16, 0.14, 'sine', 0.18);
+    },
   };
 }

@@ -13,24 +13,66 @@ export const POLICE_MAX_SPEED = 700;
 export const ENGINE_ACCEL = 420;
 export const BRAKE_ACCEL = 700;
 
-/** Four vehicle classes: each has its own top speed, acceleration, steering,
+/** Nine vehicle classes: each has its own top speed, acceleration, steering,
  * mass and footprint, so traffic feels varied and the police interceptor is
- * genuinely faster and heavier than a compact. */
+ * genuinely faster and heavier than a compact. v4 adds five more: the
+ * motorcycle (fast, twitchy, fragile), the truck (slow, heavy, huge), the
+ * limo (long and smooth), the ambulance (the paramedic's ride), and the van
+ * (the mission 7 getaway car, armour and all). */
 export const VEHICLE_CLASSES = {
   compact: { topSpeed: 470, accel: 380, turnRate: 3.0, mass: 0.9, w: 40, h: 22 },
   sedan: { topSpeed: 560, accel: 420, turnRate: 2.6, mass: 1.2, w: 46, h: 24 },
   sports: { topSpeed: 700, accel: 560, turnRate: 3.2, mass: 1.0, w: 46, h: 22 },
   police: { topSpeed: 700, accel: 540, turnRate: 3.0, mass: 1.5, w: 48, h: 24 },
+  motorcycle: { topSpeed: 720, accel: 640, turnRate: 3.6, mass: 0.5, w: 34, h: 16 },
+  truck: { topSpeed: 420, accel: 300, turnRate: 2.0, mass: 2.2, w: 56, h: 26 },
+  limo: { topSpeed: 540, accel: 380, turnRate: 2.2, mass: 1.6, w: 62, h: 24 },
+  ambulance: { topSpeed: 600, accel: 480, turnRate: 2.8, mass: 1.4, w: 50, h: 26 },
+  van: { topSpeed: 520, accel: 400, turnRate: 2.4, mass: 1.8, w: 52, h: 26 },
+};
+
+/** Which class a special kind always is: mission and job cars are not random. */
+const KIND_CLASS = {
+  police: 'police',
+  target: 'sports',
+  van: 'van',
+  ambulance: 'ambulance',
+  motorcycle: 'motorcycle',
+  truck: 'truck',
+  limo: 'limo',
+  racer: 'sports',
+  criminal: 'sports',
 };
 
 const CLASS_KEYS = ['compact', 'sedan', 'sports'];
 
-/** Plain-language names for the four classes, for the HUD and the legend. */
+/** Plain-language names for the nine classes, for the HUD and the legend. */
 export function vehicleClassLabel(vclass) {
   if (vclass === 'compact') return 'Compact';
   if (vclass === 'sports') return 'Sports';
   if (vclass === 'police') return 'Police Interceptor';
+  if (vclass === 'motorcycle') return 'Motorcycle';
+  if (vclass === 'truck') return 'Truck';
+  if (vclass === 'limo') return 'Limousine';
+  if (vclass === 'ambulance') return 'Ambulance';
+  if (vclass === 'van') return 'Van';
   return 'Sedan';
+}
+
+/** The stats of a class by name, or the sedan's when the name is unknown. */
+export function vehicleClassStats(vclass) {
+  return VEHICLE_CLASSES[vclass] || VEHICLE_CLASSES.sedan;
+}
+
+/** True for the emergency kinds: police cruisers and ambulances. */
+export function isEmergencyVehicle(car) {
+  return car.kind === 'police' || car.kind === 'ambulance';
+}
+
+/** True for the two-wheeler: it weaves through traffic, and it folds when
+ * anything bigger touches it (half damage taken, double given). */
+export function isMotorcycle(car) {
+  return car.vclass === 'motorcycle';
 }
 
 /** True when the car is a yellow cab (fares pay cash — see side.js). */
@@ -40,9 +82,12 @@ export function isTaxi(car) {
 
 function pickClass(rng) {
   const r = rng ? rng() : Math.random();
-  if (r < 0.35) return 'compact';
-  if (r < 0.8) return 'sedan';
-  return 'sports';
+  if (r < 0.30) return 'compact';
+  if (r < 0.62) return 'sedan';
+  if (r < 0.78) return 'sports';
+  if (r < 0.86) return 'motorcycle';
+  if (r < 0.93) return 'truck';
+  return 'limo';
 }
 
 const CAR_COLORS = ['#e8b13c', '#4a90d8', '#d84a4a', '#4ad88a', '#e8e8e8', '#8a6ad8', '#d88a3c', '#3cc8c8', '#c8c8c8', '#7a8a9a'];
@@ -53,8 +98,8 @@ const TAXI_COLOR = '#f2c230';
  * (the car a mission asks Lena to steal). A parked car has no driver until stolen.
  */
 export function createCar(x, y, angle, kind, rng) {
-  const color = kind === 'police' ? '#20242c' : kind === 'taxi' ? TAXI_COLOR : CAR_COLORS[Math.floor((rng ? rng() : Math.random()) * CAR_COLORS.length)];
-  const vclass = kind === 'police' ? 'police' : kind === 'target' ? 'sports' : kind === 'player' ? 'sedan' : pickClass(rng);
+  const color = kind === 'police' ? '#20242c' : kind === 'taxi' ? TAXI_COLOR : kind === 'ambulance' ? '#f0f0f0' : CAR_COLORS[Math.floor((rng ? rng() : Math.random()) * CAR_COLORS.length)];
+  const vclass = KIND_CLASS[kind] || (kind === 'player' ? 'sedan' : pickClass(rng));
   const spec = VEHICLE_CLASSES[vclass];
   return {
     x, y, angle, speed: 0,
@@ -347,5 +392,73 @@ export function spawnPoliceCar(rng, playerX, playerY) {
   const car = createCar(p.x, p.y, 0, 'police', rng);
   car.angle = Math.atan2(playerY - p.y, playerX - p.x);
   car.speed = 420; // arriving rolling, not from a standstill
+  return car;
+}
+
+// ------------------------------------------------- v4 vehicle factories
+
+/** A motorcycle: fast, twitchy, half the mass of a car. Two wheels, one rider. */
+export function createMotorcycle(x, y, angle, rng) {
+  const bike = createCar(x, y, angle, 'motorcycle', rng);
+  bike.color = '#c03030';
+  bike.health = 60; // fragile: it folds when anything bigger touches it
+  return bike;
+}
+
+/** A truck: slow, heavy, and twice the mass of a sedan. It does not stop for much. */
+export function createTruck(x, y, angle, rng) {
+  const truck = createCar(x, y, angle, 'truck', rng);
+  truck.color = '#7a8a9a';
+  truck.health = 160;
+  return truck;
+}
+
+/** A limousine: long, smooth, and expensive-looking. The city's money rides in these. */
+export function createLimo(x, y, angle, rng) {
+  const limo = createCar(x, y, angle, 'limo', rng);
+  limo.color = '#20242c';
+  limo.health = 120;
+  return limo;
+}
+
+/** An ambulance: white, with a red cross the renderer draws, and a siren that
+ * sounds when it moves. The paramedic job's ride (see minigames.js). */
+export function createAmbulance(x, y, angle, rng) {
+  const amb = createCar(x, y, angle, 'ambulance', rng);
+  amb.color = '#f0f0f0';
+  amb.siren = true;
+  return amb;
+}
+
+/** A van: the mission 7 getaway car. Armour, false plates, a full tank. */
+export function createVan(x, y, angle, rng) {
+  const van = createCar(x, y, angle, 'van', rng);
+  van.color = '#3a5a3a';
+  van.health = 140;
+  return van;
+}
+
+/**
+ * Park one car of a given class on a road near (x, y): the traffic spawner
+ * uses it to seed the new classes around the city, so a motorcycle or a truck
+ * is never a one-off — they are part of the fleet.
+ */
+export function spawnClassCar(rng, x, y, vclass) {
+  const p = randomRoadPoint(rng, x, y, 300);
+  const kind = vclass === 'van' ? 'van' : vclass === 'ambulance' ? 'ambulance'
+    : vclass === 'motorcycle' ? 'motorcycle' : vclass === 'truck' ? 'truck'
+    : vclass === 'limo' ? 'limo' : 'parked';
+  const car = createCar(p.x, p.y, 0, kind, rng);
+  if (!KIND_CLASS[kind]) {
+    // A plain parked car of the requested class: override the random roll.
+    const spec = VEHICLE_CLASSES[vclass] || VEHICLE_CLASSES.sedan;
+    car.vclass = vclass;
+    car.topSpeed = spec.topSpeed;
+    car.accel = spec.accel;
+    car.turnRate = spec.turnRate;
+    car.mass = spec.mass;
+    car.w = spec.w;
+    car.h = spec.h;
+  }
   return car;
 }

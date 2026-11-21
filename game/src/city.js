@@ -143,6 +143,37 @@ export function createCity(seed) {
   }
   for (let x = 400; x <= 4600; x += 700) streetlamps.push({ x, y: 3160 });
 
+  // v4 landmarks: the new systems' fixed points, all on open ground Lena can
+  // reach. Weapon pickups (one per corner of the city), the street race start
+  // line, the hospital ambulance bay, the police station evidence locker
+  // (mission 8), the harbour warehouse (mission 7), and Marco Venn's escape
+  // loop (mission 9) — a ring of intersections around the north half of the
+  // city, where his sedan likes to run.
+  const weaponPickups = [
+    { x: 1200, y: 900, weapon: 'shotgun' },
+    { x: 4200, y: 2540, weapon: 'smg' },
+    { x: 1400, y: 3240, weapon: 'rifle' },
+    { x: 4550, y: 640, weapon: 'shotgun' },
+  ];
+  const raceStart = { x: 2200, y: 2800 };
+  const ambulanceSpot = { x: 800, y: 2600 };
+  const hospitalDoor = { x: hospital.x + hospital.w / 2, y: hospital.y + hospital.h + 40 };
+  const evidenceSpot = { x: 1400, y: 600 };
+  const warehouseSpot = { x: 4520, y: 1800 };
+  const lawyerSpot = { x: 4400, y: 600 };
+  const escapeRoute = [
+    { x: 1400, y: 600 }, { x: 3400, y: 600 }, { x: 3400, y: 1400 },
+    { x: 2200, y: 1400 }, { x: 2200, y: 2600 }, { x: 4200, y: 2600 },
+    { x: 4200, y: 1000 }, { x: 1400, y: 1000 },
+  ];
+  // Extra streetlamps for the north districts (North Marina, North Plaza):
+  // the night phase needs them lit, and the old lamp rows stop at the
+  // avenues. These run along the northern streets instead.
+  for (const rx of [4200, 4600]) {
+    for (let y = 200; y <= 1000; y += 400) streetlamps.push({ x: rx + 62, y });
+  }
+  for (let x = 1000; x <= 4200; x += 800) streetlamps.push({ x, y: 262 });
+
   // Side-work spots, all on open ground Lena can reach on foot: the park,
   // the plaza, the beach, the pier, the garage forecourt, the hospital and
   // store fronts, and the north marina roadside. Eight hidden packages pay
@@ -194,6 +225,8 @@ export function createCity(seed) {
   return {
     seed, buildings, trees, park, plaza, garage, hospital, store, streetlamps,
     packageSpots, taxiStands, jumpRamps, beachProps, boats,
+    weaponPickups, raceStart, ambulanceSpot, hospitalDoor,
+    evidenceSpot, warehouseSpot, lawyerSpot, escapeRoute,
     beachY: BEACH_Y, waterY: WATER_Y, harborX: HARBOR_X,
     // The pier juts into the harbour water on the east edge; it is walkable.
     pier: { x: 4600, y: 1760, w: 180, h: 80 },
@@ -223,6 +256,50 @@ export function isBlockedAt(city, x, y, r) {
     if (x > b.x - r && x < b.x + b.w + r && y > b.y - r && y < b.y + b.h + r) return true;
   }
   return false;
+}
+
+/**
+ * True when a circle of radius r at (x, y) really overlaps a building, the
+ * sea or the map edge — the same test resolveCircle pushes out of. This is
+ * stricter than isBlockedAt's expanded-rect test in exactly the right way:
+ * a point near a building's corner can sit inside the expanded rect without
+ * its circle touching the wall, and treating such a point as blocked would
+ * shove Lena back every time she rounds the corner (an oscillation that
+ * nets zero progress, the same soft-lock in miniature).
+ */
+export function isCircleBlockedAt(city, x, y, r) {
+  if (x < r + 8 || x > WORLD_W - r - 8 || y < r + 8 || y > WORLD_H - r - 8) return true;
+  if (isWaterAt(city, x, y)) return true;
+  for (let i = 0; i < city.buildings.length; i += 1) {
+    const b = city.buildings[i];
+    const cx = clamp(x, b.x, b.x + b.w);
+    const cy = clamp(y, b.y, b.y + b.h);
+    const dx = x - cx;
+    const dy = y - cy;
+    if (dx * dx + dy * dy < r * r) return true;
+  }
+  return false;
+}
+
+/**
+ * The nearest point to (x, y) a circle of radius r can actually stand on:
+ * not in the sea, not inside a building, inside the map. Searches outward
+ * in rings (8 directions, 20 px steps out to 200 px) and falls back to the
+ * input point when nothing is free. Used whenever Lena must be placed
+ * somewhere safe — an eject from a wreck, or a step that finds her already
+ * inside a wall — so she is never dropped where no step out exists.
+ */
+export function nearestFreePoint(city, x, y, r) {
+  if (!isCircleBlockedAt(city, x, y, r)) return { x, y };
+  for (let ring = 20; ring <= 200; ring += 20) {
+    for (let k = 0; k < 8; k += 1) {
+      const a = (k / 8) * Math.PI * 2;
+      const px = x + Math.cos(a) * ring;
+      const py = y + Math.sin(a) * ring;
+      if (!isCircleBlockedAt(city, px, py, r)) return { x: px, y: py };
+    }
+  }
+  return { x, y };
 }
 
 /**
@@ -313,4 +390,44 @@ export function randomRoadPoint(rng, x, y, minDist) {
     if (x === undefined || dist(px, py, x, y) >= minDist) return { x: px, y: py };
   }
   return { x: 600, y: 600 };
+}
+
+/** The next point on an escape loop after the one nearest (x, y): the flee
+ * car's route is a ring, so it never has to turn around. */
+export function escapeRouteNext(route, x, y) {
+  if (!route || route.length === 0) return null;
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < route.length; i += 1) {
+    const d = dist(route[i].x, route[i].y, x, y);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return route[(best + 1) % route.length];
+}
+
+/**
+ * The nearest v4 landmark to (x, y) with its label: the warehouse, the police
+ * station, the lawyer, the race line, the ambulance bay, or the nearest weapon
+ * pickup. The HUD's hint line reads this when Lena is close to one, so the
+ * new systems are findable without the minimap.
+ */
+export function nearestLandmark(city, x, y) {
+  const spots = [
+    { x: city.warehouseSpot.x, y: city.warehouseSpot.y, label: 'Harbour warehouse — mission 7' },
+    { x: city.evidenceSpot.x, y: city.evidenceSpot.y, label: 'Police station — mission 8' },
+    { x: city.lawyerSpot.x, y: city.lawyerSpot.y, label: "Lawyer's office — mission 8" },
+    { x: city.raceStart.x, y: city.raceStart.y, label: 'Street race start — $50 entry' },
+    { x: city.ambulanceSpot.x, y: city.ambulanceSpot.y, label: 'Ambulance — paramedic work' },
+  ];
+  for (const w of city.weaponPickups || []) {
+    spots.push({ x: w.x, y: w.y, label: `${w.weapon.toUpperCase()} pickup` });
+  }
+  let best = null;
+  let bestD = Infinity;
+  for (const s of spots) {
+    const d = dist(s.x, s.y, x, y);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  if (!best || bestD > 260) return null;
+  return { ...best, dist: Math.round(bestD) };
 }

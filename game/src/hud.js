@@ -2,10 +2,16 @@
 // its timer, plus the minimap — a small live canvas of the whole city with Lena,
 // her car, the police, traffic and the mission marker on it.
 
-import { WORLD_H, WORLD_W, districtAt } from './city.js';
-import { missionTarget, missionTargetFor, missionSummary, debtProgress } from './missions.js';
+import { WORLD_H, WORLD_W, districtAt, nearestLandmark } from './city.js';
+import { missionTarget, missionTargetFor, missionSummary, debtProgress, missionProgress } from './missions.js';
 import { hideoutProgress, heatLevelName } from './wanted.js';
 import { sideStatusText, sideMarkers } from './side.js';
+import { weaponHudText, weaponMarkers } from './weapons.js';
+import { clockHudText } from './daynight.js';
+import { districtHudText } from './districts.js';
+import { minigameHudText, minigameMarkers } from './minigames.js';
+import { currentDialogueLine, dialogueActive } from './cutscenes.js';
+import { missions2Summary } from './missions2.js';
 
 /** Write text only when it changed: updateHud runs every frame, and a
  * redundant textContent write is work the browser does not need to redo. */
@@ -36,6 +42,15 @@ export function createHud() {
     side: el('hud-side'),
     district: el('hud-district'),
     fps: el('hud-fps'),
+    // v4: the weapon slot, the day-night clock, the minigame line, and the
+    // dialogue box (name + text + advance hint, all in one element).
+    weapons: el('hud-weapons'),
+    clock: el('hud-clock'),
+    minigame: el('hud-minigame'),
+    dialog: el('hud-dialog'),
+    dialogName: el('hud-dialog-name'),
+    dialogText: el('hud-dialog-text'),
+    dialogHint: el('hud-dialog-hint'),
     minimap,
     mapCtx: minimap ? minimap.getContext('2d') : null,
   };
@@ -85,6 +100,23 @@ export function updateHud(hud, game) {
   }
   setText(hud.timer, game.missions.timer > 0 ? `⏱ ${Math.ceil(game.missions.timer)}s` : '');
   setText(hud.ammo, player.onFoot ? `🔫 ${player.ammo}` : '');
+  // v4: the weapon slot (gun + ammo + owned slots), the day-night clock, and
+  // the minigame line (race position, vigilante clock, paramedic run).
+  if (hud.weapons && player.weapons) setText(hud.weapons, weaponHudText(player));
+  if (hud.clock && game.clock) setText(hud.clock, clockHudText(game.clock));
+  if (hud.minigame && game.minigames) {
+    let mgText = minigameHudText(game.minigames, game);
+    const m2 = game.missions2 ? missions2Summary(game.missions2, game) : null;
+    if (m2 && m2.fleeHp !== null) mgText = `MARCO'S SEDAN: ${m2.fleeHp} HP — ram it!`;
+    else if (m2 && m2.lockdown) mgText = 'LOCKDOWN: 5 stars — the evidence is in the police station';
+    setText(hud.minigame, mgText);
+  }
+  // v4: the debt is paid at mission 6, but the story runs to mission 9 — the
+  // debt line says so instead of showing $0 left for three jobs.
+  if (!game.missions.done && debt.left === 0 && game.missions.index >= 6) {
+    const prog = missionProgress(game.missions);
+    setText(hud.debt, `DEBT PAID ✓ · THE COSTA SOL JOB · ${prog.done}/9`);
+  }
   if (game.missions.banner > 0 && game.missions.justCompleted) {
     hud.banner.textContent = `✓ ${game.missions.justCompleted.title} complete — +$${game.missions.justCompleted.reward}`;
     hud.banner.classList.add('show');
@@ -102,15 +134,43 @@ export function updateHud(hud, game) {
   }
   // Side-work line: packages found, taxi fares, jumps — and the live FPS,
   // so the frame rate is always visible, not a number in a log.
-  if (hud.side && game.side) setText(hud.side, sideStatusText(game.side));
+  if (hud.side && game.side) {
+    // v4: a nearby landmark hint joins the side line, so the new systems are
+    // findable without the minimap.
+    const px0 = player.car ? player.car.x : player.x;
+    const py0 = player.car ? player.car.y : player.y;
+    const near = nearestLandmark(game.city, px0, py0);
+    setText(hud.side, near
+      ? `${sideStatusText(game.side)} · ${near.label} (${near.dist}m)`
+      : sideStatusText(game.side));
+  }
   if (hud.district) {
     const px = player.car ? player.car.x : player.x;
     const py = player.car ? player.car.y : player.y;
-    setText(hud.district, `◈ ${districtAt(px, py).toUpperCase()}`);
+    // v4: the district line grows a bonus, a raid warning, and a control star.
+    setText(hud.district, game.districts ? districtHudText(game.districts, px, py) : `◈ ${districtAt(px, py).toUpperCase()}`);
   }
   if (hud.fps && game.fps) {
     setText(hud.fps, `${game.fps} FPS`);
     hud.fps.className = game.fps >= 50 ? 'good' : game.fps >= 30 ? 'warn' : 'bad';
+  }
+  // v4: the dialogue box — speaker name, typed text, and the advance hint. It
+  // shows only while a dialogue is open, and hides cleanly. (It starts with
+  // class "hidden" in the HTML, so visibility is the hidden class — the old
+  // "show" toggle never removed it and the box stayed invisible.)
+  if (hud.dialog && game.dialogue) {
+    if (dialogueActive(game.dialogue)) {
+      const line = currentDialogueLine(game.dialogue);
+      if (line) {
+        setText(hud.dialogName, line.name);
+        hud.dialogName.style.color = line.color;
+        setText(hud.dialogText, line.text);
+        setText(hud.dialogHint, line.done ? `E / Click ▸ (${line.index + 1}/${line.total})` : '…');
+      }
+      hud.dialog.classList.remove('hidden');
+    } else {
+      hud.dialog.classList.add('hidden');
+    }
   }
 }
 
@@ -185,6 +245,53 @@ export function drawMinimap(hud, game) {
         ctx.arc(X(m.x), Y(m.y), 3, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+  }
+  // v4 minimap markers: weapon pickups (orange), the race line and its
+  // checkpoints (white), the criminal car (red), the patient (pink), the
+  // ambulance (white ring), the getaway van (green) and Marco's sedan (dark
+  // blue) — the new systems, findable from the map alone.
+  if (game.player && game.player.weapons) {
+    for (const m of weaponMarkers(game.player)) {
+      ctx.fillStyle = '#ff8c28';
+      ctx.fillRect(X(m.x) - 2, Y(m.y) - 2, 4, 4);
+    }
+  }
+  if (game.minigames) {
+    for (const m of minigameMarkers(game.minigames)) {
+      if (m.kind === 'race-start') {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(X(m.x) - 2, Y(m.y) - 2, 4, 4);
+      } else if (m.kind === 'race-cp') {
+        ctx.fillStyle = '#ffd23c';
+        ctx.fillRect(X(m.x) - 1.5, Y(m.y) - 1.5, 3, 3);
+      } else if (m.kind === 'criminal') {
+        ctx.fillStyle = '#ff4040';
+        ctx.beginPath();
+        ctx.arc(X(m.x), Y(m.y), 3, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (m.kind === 'patient') {
+        ctx.fillStyle = '#ff9ac0';
+        ctx.fillRect(X(m.x) - 2, Y(m.y) - 2, 4, 4);
+      } else if (m.kind === 'ambulance') {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(X(m.x), Y(m.y), 3.5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+  if (game.missions2) {
+    if (game.missions2.van && !game.missions2.van.dead) {
+      ctx.fillStyle = '#50dc78';
+      ctx.fillRect(X(game.missions2.van.x) - 2, Y(game.missions2.van.y) - 2, 4, 4);
+    }
+    if (game.missions2.fleeCar && !game.missions2.fleeCar.dead) {
+      ctx.fillStyle = '#3070ff';
+      ctx.beginPath();
+      ctx.arc(X(game.missions2.fleeCar.x), Y(game.missions2.fleeCar.y), 3, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
   // Lena: white dot with a dark ring, or her car in gold.

@@ -19,6 +19,12 @@ import { CAR_H, CAR_W } from './vehicles.js';
 import { missionTarget, missionTargetFor } from './missions.js';
 import { drawParticles as drawPoolParticles } from './particles.js';
 import { sideMarkers } from './side.js';
+import { skyTint, lampGlow, headlightsOn, isNight, fireflyPositions } from './daynight.js';
+import { weaponMarkers } from './weapons.js';
+import { minigameMarkers } from './minigames.js';
+import { policeTacticMarkers } from './wanted.js';
+import { dialogueActive } from './cutscenes.js';
+import { playerWeaponId } from './player.js';
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
@@ -536,6 +542,39 @@ export function createRenderer(canvas) {
       ctx.textAlign = 'center';
       ctx.fillText('TAXI', 0, 3);
     }
+    if (car.kind === 'ambulance') {
+      // White ambulance with a red cross on the roof.
+      ctx.fillStyle = '#c03030';
+      ctx.fillRect(-3, -8, 6, 16);
+      ctx.fillRect(-8, -3, 16, 6);
+    }
+    if (car.kind === 'van') {
+      ctx.fillStyle = '#e8e8e8';
+      ctx.font = font(8, true);
+      ctx.textAlign = 'center';
+      ctx.fillText('VAN', 0, 3);
+    }
+    if (car.kind === 'motorcycle') {
+      // Two wheels and a rider: a slim bike reads differently from a car.
+      ctx.fillStyle = '#222222';
+      ctx.beginPath(); ctx.arc(w / 2 - 4, 0, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(-w / 2 + 4, 0, 4, 0, Math.PI * 2); ctx.fill();
+    }
+    if (car.kind === 'truck') {
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(-w / 2 + 6, -h / 2 + 3, w - 20, h - 6);
+    }
+    if (car.kind === 'limo') {
+      ctx.fillStyle = '#1c2a38';
+      ctx.fillRect(-w / 2 + 12, -h / 2 + 3, 10, h - 6);
+      ctx.fillRect(2, -h / 2 + 3, 10, h - 6);
+    }
+    if (car.fleeCar) {
+      ctx.fillStyle = '#ffd23c';
+      ctx.font = font(8, true);
+      ctx.textAlign = 'center';
+      ctx.fillText('MARCO', 0, -h / 2 - 6);
+    }
     if (car.kind === 'target') {
       ctx.fillStyle = '#20242c';
       ctx.font = font(8, true);
@@ -587,7 +626,7 @@ export function createRenderer(canvas) {
     ctx.beginPath(); ctx.arc(ped.x, ped.y + bob * 0.4, 10, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = ped.skin;
     ctx.beginPath(); ctx.arc(ped.x + Math.cos(ped.angle) * 4, ped.y + Math.sin(ped.angle) * 4 - 4 + bob * 0.4, 6, 0, Math.PI * 2); ctx.fill();
-    if (ped.waiting) {
+    if (ped.waiting && !ped.racer && !ped.paramedic && !ped.lawyer && !ped.patient) {
       // A fare waiting for a taxi waves one arm and carries a gold TAXI tag,
       // so the player spots them from across the street.
       const wave = Math.sin(performance.now() / 240) * 6;
@@ -605,6 +644,30 @@ export function createRenderer(canvas) {
       ctx.textAlign = 'center';
       ctx.strokeText('TAXI', ped.x, ped.y - 28);
       ctx.fillText('TAXI', ped.x, ped.y - 28);
+    }
+    if (ped.gang) {
+      // Dark cap on a dark jacket: the docks crowd watches, never runs.
+      ctx.fillStyle = '#1a1a22';
+      ctx.beginPath(); ctx.arc(ped.x, ped.y - 8, 7, Math.PI, 0); ctx.fill();
+    }
+    if (ped.racer) {
+      // A checkered flag, waved at the start line.
+      const wave = Math.sin(performance.now() / 200) * 4;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(ped.x + 8, ped.y - 26 + wave, 12, 8);
+      ctx.fillStyle = '#111111';
+      ctx.fillRect(ped.x + 8, ped.y - 22 + wave, 6, 4);
+      ctx.fillRect(ped.x + 14, ped.y - 26 + wave, 6, 4);
+    }
+    if (ped.paramedic || ped.lawyer || ped.patient) {
+      ctx.font = font(10, true);
+      ctx.fillStyle = ped.patient ? '#ff9ac0' : ped.lawyer ? '#c8a0e8' : '#ffffff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+      ctx.lineWidth = 3;
+      ctx.textAlign = 'center';
+      const tag = ped.patient ? 'HELP' : ped.lawyer ? 'ADA' : 'MED';
+      ctx.strokeText(tag, ped.x, ped.y - 26);
+      ctx.fillText(tag, ped.x, ped.y - 26);
     }
   }
 
@@ -626,13 +689,15 @@ export function createRenderer(canvas) {
     ctx.beginPath(); ctx.arc(player.x + Math.cos(player.angle) * 4, player.y + Math.sin(player.angle) * 4 - 3, 6.5, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#3a2a1a';
     ctx.beginPath(); ctx.arc(player.x - Math.cos(player.angle) * 2, player.y - Math.sin(player.angle) * 2 - 5, 6, 0, Math.PI * 2); ctx.fill();
-    // Pistol in hand when aiming.
+    // The gun in hand: pistol, shotgun, SMG or rifle — each a different length.
     if (game.mouseDown || player.muzzle > 0) {
+      const gunId = playerWeaponId(player);
+      const gunLen = gunId === 'rifle' ? 30 : gunId === 'shotgun' ? 26 : gunId === 'smg' ? 18 : 22;
       ctx.strokeStyle = '#222222';
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(player.x + Math.cos(player.angle) * 10, player.y + Math.sin(player.angle) * 10);
-      ctx.lineTo(player.x + Math.cos(player.angle) * 22, player.y + Math.sin(player.angle) * 22);
+      ctx.lineTo(player.x + Math.cos(player.angle) * gunLen, player.y + Math.sin(player.angle) * gunLen);
       ctx.stroke();
     }
     if (player.muzzle > 0) {
@@ -654,16 +719,17 @@ export function createRenderer(canvas) {
 
   function drawBullets(bullets) {
     // Bullet tracers: a bright line from where the shot has been to where it is.
-    ctx.strokeStyle = 'rgba(255,226,122,0.8)';
+    // Each gun's tracer has its own colour (pistol gold, SMG blue, rifle red).
     ctx.lineWidth = 2;
     for (const b of bullets) {
+      ctx.strokeStyle = b.color ? b.color : '#ffe27a';
       ctx.beginPath();
       ctx.moveTo(b.x - b.vx * 0.03, b.y - b.vy * 0.03);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
     }
-    ctx.fillStyle = '#ffe27a';
     for (const b of bullets) {
+      ctx.fillStyle = b.color ? b.color : '#ffe27a';
       ctx.beginPath();
       ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -742,6 +808,156 @@ export function createRenderer(canvas) {
         }
       }
     }
+  }
+
+  /** Weapon pickups: orange gun markers on the ground, pulsing so Lena spots them. */
+  function drawWeaponPickups(game) {
+    if (!game.player || !game.player.weapons) return;
+    const pulse = 1 + Math.sin(performance.now() / 300) * 0.15;
+    ctx.textAlign = 'center';
+    for (const m of weaponMarkers(game.player)) {
+      if (m.x < camera.x - 40 || m.x > camera.x + VIEW_W + 40 || m.y < camera.y - 40 || m.y > camera.y + VIEW_H + 40) continue;
+      ctx.fillStyle = 'rgba(255,140,40,0.25)';
+      ctx.beginPath(); ctx.arc(m.x, m.y, 24 * pulse, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#ff8c28';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(m.x, m.y, 24 * pulse, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ff8c28';
+      ctx.font = font(11, true);
+      ctx.fillText(m.weapon.toUpperCase(), m.x, m.y + 4);
+    }
+  }
+
+  /** Minigame markers: the race line and checkpoints, the criminal car, the
+   * patient, the ambulance. */
+  function drawMinigameMarkers(game) {
+    if (!game.minigames) return;
+    ctx.textAlign = 'center';
+    for (const m of minigameMarkers(game.minigames)) {
+      if (m.x < camera.x - 40 || m.x > camera.x + VIEW_W + 40 || m.y < camera.y - 40 || m.y > camera.y + VIEW_H + 40) continue;
+      if (m.kind === 'race-start') {
+        // The checkered start line across the avenue.
+        for (let i = -3; i <= 3; i += 1) {
+          ctx.fillStyle = (i % 2 === 0) ? '#ffffff' : '#111111';
+          ctx.fillRect(m.x + i * 12, m.y - 30, 12, 12);
+          ctx.fillStyle = (i % 2 === 0) ? '#111111' : '#ffffff';
+          ctx.fillRect(m.x + i * 12, m.y - 18, 12, 12);
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.font = font(13, true);
+        ctx.fillText('RACE — E · $50', m.x, m.y - 40);
+      } else if (m.kind === 'race-cp') {
+        ctx.strokeStyle = '#ffd23c';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(m.x, m.y, 22, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ffd23c';
+        ctx.font = font(15, true);
+        ctx.fillText(`${m.cp}`, m.x, m.y + 5);
+      } else if (m.kind === 'criminal') {
+        ctx.strokeStyle = '#ff4040';
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(m.x, m.y, 34, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#ff4040';
+        ctx.font = font(12, true);
+        ctx.fillText('WANTED', m.x, m.y - 40);
+      } else if (m.kind === 'patient') {
+        ctx.fillStyle = '#ff9ac0';
+        ctx.font = font(20, true);
+        ctx.fillText('+', m.x, m.y + 7);
+        ctx.font = font(11, true);
+        ctx.fillText('PATIENT', m.x, m.y - 22);
+      } else if (m.kind === 'ambulance') {
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(m.x, m.y, 30, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+
+  /** Mission 7-9 markers: the getaway van, Marco's sedan, the final walk-up point. */
+  function drawMissions2Markers(game) {
+    if (!game.missions2) return;
+    ctx.textAlign = 'center';
+    const m2 = game.missions2;
+    if (m2.van && !m2.van.dead) {
+      ctx.strokeStyle = '#50dc78';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(m2.van.x, m2.van.y, 36, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#50dc78';
+      ctx.font = font(12, true);
+      ctx.fillText('GETAWAY VAN', m2.van.x, m2.van.y - 42);
+    }
+    if (m2.fleeCar && !m2.fleeCar.dead) {
+      ctx.strokeStyle = '#3070ff';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(m2.fleeCar.x, m2.fleeCar.y, 36, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#8ab0ff';
+      ctx.font = font(12, true);
+      ctx.fillText("MARCO'S SEDAN", m2.fleeCar.x, m2.fleeCar.y - 42);
+    }
+    if (m2.finalPoint) {
+      const pulse = 1 + Math.sin(performance.now() / 300) * 0.15;
+      ctx.strokeStyle = '#ffd23c';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(m2.finalPoint.x, m2.finalPoint.y, 26 * pulse, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ffd23c';
+      ctx.font = font(13, true);
+      ctx.fillText('END IT — E', m2.finalPoint.x, m2.finalPoint.y - 32);
+    }
+  }
+
+  /** Spike strips: dark toothed strips across the lane. */
+  function drawSpikeStrips(game) {
+    if (!game.tactics) return;
+    for (const m of policeTacticMarkers(game.tactics)) {
+      if (m.x < camera.x - 40 || m.x > camera.x + VIEW_W + 40 || m.y < camera.y - 40 || m.y > camera.y + VIEW_H + 40) continue;
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      ctx.rotate(m.angle);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(-30, -8, 60, 16);
+      ctx.fillStyle = '#c8c8c8';
+      for (let i = -24; i <= 24; i += 12) {
+        ctx.beginPath();
+        ctx.moveTo(i, -8);
+        ctx.lineTo(i + 6, 0);
+        ctx.lineTo(i, 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  /** Night fireflies over the park: small amber glows that drift and pulse. */
+  function drawFireflies(game) {
+    if (!game.clock || !isNight(game.clock)) return;
+    const spots = fireflyPositions(game.clock, game.frameNo * 30, game.city.park);
+    for (const f of spots) {
+      if (f.x < camera.x - 20 || f.x > camera.x + VIEW_W + 20 || f.y < camera.y - 20 || f.y > camera.y + VIEW_H + 20) continue;
+      ctx.globalAlpha = f.glow;
+      ctx.fillStyle = '#ffe27a';
+      ctx.beginPath(); ctx.arc(f.x, f.y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** The day-night sky tint: one full-screen fill over the world, in screen
+   * space after the world pass. Cheap, and it unifies the frame's mood. */
+  function drawSkyTint(game) {
+    if (!game.clock) return;
+    const tint = skyTint(game.clock);
+    if (tint.alpha <= 0.01) return;
+    ctx.fillStyle = `rgba(${tint.r},${tint.g},${tint.b},${tint.alpha})`;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  }
+
+  /** Cinematic letterbox bars while a dialogue is open: the story gets a frame. */
+  function drawLetterbox(game) {
+    if (!game.dialogue || !dialogueActive(game.dialogue)) return;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, VIEW_W, 64);
+    ctx.fillRect(0, VIEW_H - 64, VIEW_W, 64);
   }
 
   function drawMarkers(game) {
@@ -839,13 +1055,17 @@ export function createRenderer(canvas) {
     const onScreen = (x, y, r) => x > camera.x - r && x < camera.x + VIEW_W + r && y > camera.y - r && y < camera.y + VIEW_H + r;
     const px = game.player.car ? game.player.car.x : game.player.x;
     const py = game.player.car ? game.player.car.y : game.player.y;
+    const night = game.clock ? headlightsOn(game.clock) : false;
     const headlight = (car, always) => {
       if (car.dead || !onScreen(car.x, car.y, 320)) return;
       if (!always && car.kind === 'parked') return; // parked: lights off
       if (!always && car.kind !== 'police' && (car.x - px) * (car.x - px) + (car.y - py) * (car.y - py) > 700 * 700) return;
       const hx = car.x + Math.cos(car.angle) * 130;
       const hy = car.y + Math.sin(car.angle) * 130;
+      // At night the cones burn full; in daylight they are dimmer.
+      ctx.globalAlpha = night ? 1 : 0.55;
       ctx.drawImage(headlightSprite, hx - 120, hy - 120);
+      ctx.globalAlpha = 1;
     };
     for (const car of game.cars) headlight(car, false);
     for (const cop of game.police) headlight(cop, true);
@@ -856,10 +1076,16 @@ export function createRenderer(canvas) {
       if (cop.dead || !onScreen(cop.x, cop.y, 260)) continue;
       ctx.drawImage(flash ? sirenRedSprite : sirenBlueSprite, cop.x - 110, cop.y - 110);
     }
-    // Streetlamps: warm pools along the avenues and the beachfront.
+    // Streetlamps: warm pools along the avenues and the beachfront. Their
+    // glow follows the clock — full at night, gone at noon.
+    const glow = game.clock ? lampGlow(game.clock) : 1;
     for (const lamp of game.city.streetlamps) {
       if (!onScreen(lamp.x, lamp.y, 200)) continue;
-      ctx.drawImage(lampSprite, lamp.x - 90, lamp.y - 90);
+      if (glow > 0.02) {
+        ctx.globalAlpha = glow;
+        ctx.drawImage(lampSprite, lamp.x - 90, lamp.y - 90);
+        ctx.globalAlpha = 1;
+      }
       ctx.fillStyle = '#ffd88a';
       ctx.beginPath();
       ctx.arc(lamp.x, lamp.y, 4, 0, Math.PI * 2);
@@ -897,6 +1123,10 @@ export function createRenderer(canvas) {
     drawTireMarks(game.tireMarks);
     drawMarkers(game);
     drawSideMarkers(game);
+    drawWeaponPickups(game);
+    drawMinigameMarkers(game);
+    drawMissions2Markers(game);
+    drawSpikeStrips(game);
     // Draw order: parked and traffic, then police, then Lena's car, then people, then Lena.
     for (const car of game.cars) drawCar(car, false);
     for (const cop of game.police) drawCar(cop, false);
@@ -907,9 +1137,12 @@ export function createRenderer(canvas) {
     drawPoolParticles(ctx, game.particles);
     drawFloatTexts(game.floatTexts);
     drawLighting(game);
+    drawFireflies(game);
     ctx.restore();
     drawWaypointArrow(game);
     drawSunlight();
+    drawSkyTint(game);
+    drawLetterbox(game);
     const dt = performance.now() - t0;
     stats.drawMs = stats.drawMs * 0.9 + dt * 0.1;
   }

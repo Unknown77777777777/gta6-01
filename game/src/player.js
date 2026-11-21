@@ -2,7 +2,7 @@
 // is shared by the car code: when she is driving, `car` points at her car and her
 // position follows it; on foot she moves on her own two feet.
 
-import { clamp, isWaterAt, resolveCircle } from './city.js';
+import { clamp, isCircleBlockedAt, isWaterAt, nearestFreePoint, resolveCircle } from './city.js';
 
 export const PLAYER_RADIUS = 14;
 export const WALK_SPEED = 170;
@@ -30,6 +30,13 @@ export function createPlayer(x, y) {
     kx: 0, ky: 0, // knockback velocity: a shove from a bumper decays fast
     moving: false,
     running: false,
+    // v4: the arsenal and the minigame ledger. `weapons` is the state object
+    // weapons.js builds (current gun, owned guns, ammo per gun); the three
+    // counters are the minigame stats the save file keeps.
+    weapons: null,
+    racesWon: 0,
+    vigilanteKills: 0,
+    patientsSaved: 0,
   };
 }
 
@@ -67,6 +74,19 @@ export function updatePlayerOnFoot(player, move, run, dt, city) {
     player.angle = Math.atan2(ny, nx);
     const stepX = nx * speed * dt;
     const stepY = ny * speed * dt;
+    // Free the start first: a step that begins inside a wall can never get
+    // out, because the axis retries below assume a free start — from inside
+    // a building each retry re-collides and reverts to the same trapped
+    // spot, so movement along the shortest exit side nets exactly zero
+    // every frame (a permanent soft-lock: run 3 sat at (2340,1115) for
+    // ~450 s). Push out first, so the step starts on open ground and the
+    // slide below works as designed. This also frees a Lena shoved into
+    // the sea, where the no-swimming rule would otherwise freeze her.
+    if (isCircleBlockedAt(city, player.x, player.y, PLAYER_RADIUS)) {
+      const free = nearestFreePoint(city, player.x, player.y, PLAYER_RADIUS);
+      player.x = free.x;
+      player.y = free.y;
+    }
     const ox = player.x;
     const oy = player.y;
     player.x += stepX;
@@ -152,4 +172,80 @@ export function resetPlayerTimers(player) {
 /** True while Lena is aiming her pistol (muzzle flash still showing). */
 export function playerIsAiming(player) {
   return player.muzzle > 0;
+}
+
+/**
+ * Equip a gun Lena owns, by id ('pistol' | 'shotgun' | 'smg' | 'rifle').
+ * Returns true when the gun is now in her hands. The pistol is always owned;
+ * the others need a pickup first (see weapons.js).
+ */
+export function equipWeapon(player, weaponId) {
+  const ws = player.weapons;
+  if (!ws) return weaponId === 'pistol';
+  if (!ws.owned[weaponId]) return false;
+  ws.current = weaponId;
+  player.ammo = ws.ammo[weaponId];
+  player.fireTimer = 0.15;
+  return true;
+}
+
+/** The id of the gun Lena is holding ('pistol' when no weapon state yet). */
+export function playerWeaponId(player) {
+  return (player.weapons && player.weapons.current) || 'pistol';
+}
+
+/** Rounds in the gun Lena is holding right now. */
+export function playerWeaponAmmo(player) {
+  const ws = player.weapons;
+  if (!ws) return player.ammo;
+  return ws.ammo[ws.current] ?? 0;
+}
+
+/** Add rounds to a gun Lena owns. Returns the rounds actually added. */
+export function addPlayerAmmo(player, weaponId, rounds) {
+  const ws = player.weapons;
+  if (!ws || !ws.owned[weaponId]) return 0;
+  const max = { pistol: 12, shotgun: 6, smg: 30, rifle: 8 }[weaponId] || 12;
+  const before = ws.ammo[weaponId];
+  ws.ammo[weaponId] = Math.min(max, before + rounds);
+  if (ws.current === weaponId) player.ammo = ws.ammo[weaponId];
+  return ws.ammo[weaponId] - before;
+}
+
+/**
+ * The minigame ledger: races won, criminals stopped, patients saved. The save
+ * file and the story-complete screen read this one object.
+ */
+export function playerStats(player) {
+  return {
+    racesWon: player.racesWon || 0,
+    vigilanteKills: player.vigilanteKills || 0,
+    patientsSaved: player.patientsSaved || 0,
+  };
+}
+
+/** One line about Lena's combat readiness, for the HUD's weapon slot. */
+export function playerCombatSummary(player) {
+  const ws = player.weapons;
+  if (!ws) return { weapon: 'pistol', ammo: player.ammo, owned: 1 };
+  let owned = 0;
+  for (const id of ['pistol', 'shotgun', 'smg', 'rifle']) if (ws.owned[id]) owned += 1;
+  return { weapon: ws.current, ammo: ws.ammo[ws.current], owned };
+}
+
+/**
+ * After a wasted/busted respawn: back to the pistol with a fresh magazine,
+ * but the guns she picked up stay hers — a hospital trip is not a
+ * confiscation. The minigame counters are untouched: a lost race is still a
+ * race she ran.
+ */
+export function resetPlayerCombat(player) {
+  const ws = player.weapons;
+  if (ws) {
+    ws.current = 'pistol';
+    ws.ammo.pistol = 12;
+  }
+  player.ammo = 12;
+  player.fireTimer = 0;
+  player.muzzle = 0;
 }

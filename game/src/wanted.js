@@ -88,10 +88,12 @@ export function heatLevelName(level) {
 
 /**
  * Step the wanted level. `police` are the active police cars, `hideout` is the
- * garage zone, `pos` is Lena's position. Returns 'cooled' when a star drops,
- * 'hidden' when the garage clears the heat, else null.
+ * garage zone, `pos` is Lena's position. `slowDecay` (v4) is true while a
+ * district raid runs where she is: the heat then cools a third slower.
+ * Returns 'cooled' when a star drops, 'hidden' when the garage clears the
+ * heat, else null.
  */
-export function updateWanted(wanted, dt, pos, police, hideout) {
+export function updateWanted(wanted, dt, pos, police, hideout, slowDecay) {
   wanted.sinceCrime += dt;
   // Is any cop close enough to see her right now?
   wanted.seenByPolice = false;
@@ -122,7 +124,7 @@ export function updateWanted(wanted, dt, pos, police, hideout) {
   // Quiet and unseen: the heat cools off one star at a time. Hotter chases
   // need longer quiet (quietSecondsFor) and cool slower (decayStepFor).
   if (wanted.sinceCrime > quietSecondsFor(wanted.level) && !wanted.seenByPolice) {
-    wanted.decayTimer -= dt;
+    wanted.decayTimer -= dt * (slowDecay ? 0.66 : 1);
     if (wanted.decayTimer <= 0) {
       wanted.level -= 1;
       wanted.decayTimer = decayStepFor(wanted.level);
@@ -134,4 +136,176 @@ export function updateWanted(wanted, dt, pos, police, hideout) {
     }
   }
   return null;
+}
+
+// ------------------------------------------------- v4 police tactics
+
+/** Fresh police-tactics state: roadblocks, spike strips, and their clocks. */
+export function createPoliceTactics() {
+  return {
+    roadblockCars: [], // the two cruisers of the live roadblock, if any
+    roadblockTimer: 40, // seconds until the next roadblock may form
+    roadblockLife: 0, // seconds the live roadblock has left
+    spikeStrips: [], // { x, y, angle, life } on the road ahead
+    spikeTimer: 18, // seconds until the next spike strip may drop
+  };
+}
+
+/**
+ * Extra cruisers a district's police presence adds while the heat is on: a
+ * presence-4 district fields one more car, presence-5 fields two. The main
+ * loop adds this to policeTargetCount, so a hot district is visibly hotter
+ * than a quiet one.
+ */
+export function districtPatrolCount(level, policePresence) {
+  if (level <= 0) return 0;
+  if (policePresence >= 5) return 2;
+  if (policePresence >= 4) return 1;
+  return 0;
+}
+
+/** Faster cruiser arrivals while a district raid is live. */
+export function raidSpawnInterval(level) {
+  return Math.max(0.4, policeSpawnInterval(level) * 0.6);
+}
+
+/** The heat cools slower during a raid: each star takes half as long again. */
+export function decayStepDuringRaid(level) {
+  return decayStepFor(level) * 1.5;
+}
+
+/**
+ * Form a roadblock: two cruisers parked across the road ahead of Lena, nose
+ * to tail, blocking the lane. They sit in game.cars (not game.police), so the
+ * police AI never drives them away — they are an obstacle, and the car-vs-car
+ * collision code does the rest. Returns true when one formed.
+ */
+export function formRoadblock(tactics, game) {
+  if (tactics.roadblockCars.length > 0) return false;
+  if (game.wanted.level < 3) return false;
+  const px = game.player.car ? game.player.car.x : game.player.x;
+  const py = game.player.car ? game.player.car.y : game.player.y;
+  const angle = game.player.car ? game.player.car.angle : game.player.angle;
+  // 420 px ahead, across the road: two cruisers side by side.
+  const cx = px + Math.cos(angle) * 420;
+  const cy = py + Math.sin(angle) * 420;
+  const perp = angle + Math.PI / 2;
+  for (const side of [-1, 1]) {
+    const car = createPoliceCarAt(cx + Math.cos(perp) * 26 * side, cy + Math.sin(perp) * 26 * side, perp);
+    car.roadblock = true;
+    game.cars.push(car);
+    tactics.roadblockCars.push(car);
+  }
+  tactics.roadblockLife = 30;
+  return true;
+}
+
+/** One parked cruiser for a roadblock: stationary, lights on, in the way. */
+function createPoliceCarAt(x, y, angle) {
+  return {
+    x, y, angle, speed: 0,
+    kind: 'police', color: '#20242c', vclass: 'police',
+    topSpeed: 700, accel: 540, turnRate: 3.0, mass: 1.5, w: 48, h: 24,
+    health: 100, lane: 0, turnAt: 0, stopped: 0,
+    ramCooldown: 0, siren: true, skid: 0, smoke: 0, wallCooldown: 0,
+    dead: false, fade: 0, roadblock: true,
+  };
+}
+
+/** Clear the live roadblock (heat gone, or its 30 seconds are up). */
+export function clearRoadblock(tactics, game) {
+  for (const car of tactics.roadblockCars) {
+    const i = game.cars.indexOf(car);
+    if (i >= 0) game.cars.splice(i, 1);
+  }
+  tactics.roadblockCars = [];
+  tactics.roadblockLife = 0;
+}
+
+/**
+ * Drop a spike strip on the road ahead of Lena: a dark strip across the lane
+ * that shreds her tyres. One strip at a time, only at four stars and up, and
+ * only while she is moving — a parked car cannot be spiked.
+ */
+export function dropSpikeStrip(tactics, game) {
+  if (game.wanted.level < 4) return false;
+  if (tactics.spikeStrips.length > 0) return false;
+  const car = game.player.car;
+  if (!car || Math.abs(car.speed) < 120) return false;
+  const x = car.x + Math.cos(car.angle) * 300;
+  const y = car.y + Math.sin(car.angle) * 300;
+  tactics.spikeStrips.push({ x, y, angle: car.angle + Math.PI / 2, life: 25 });
+  return true;
+}
+
+/**
+ * Lena's car crossed a spike strip: the tyres go, the car slows hard, and the
+ * strip is spent. Returns true when a strip was hit (the caller floats the
+ * warning and plays the crash).
+ */
+export function checkSpikeStrips(tactics, game) {
+  const car = game.player.car;
+  if (!car) return false;
+  for (let i = tactics.spikeStrips.length - 1; i >= 0; i -= 1) {
+    const s = tactics.spikeStrips[i];
+    // Across the strip (the strip lies perpendicular to the road).
+    const dx = car.x - s.x;
+    const dy = car.y - s.y;
+    const along = dx * Math.cos(s.angle) + dy * Math.sin(s.angle);
+    const across = -dx * Math.sin(s.angle) + dy * Math.cos(s.angle);
+    if (Math.abs(along) < 30 && Math.abs(across) < 14 && Math.abs(car.speed) > 80) {
+      car.speed *= 0.35;
+      car.health -= 8;
+      car.smoke = Math.min(1, car.smoke + 0.5);
+      tactics.spikeStrips.splice(i, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Step the police tactics, once per frame. Roadblocks form at three stars and
+ * up, about every 40 seconds, and live for 30; spike strips drop at four stars
+ * and up, about every 18 seconds, and fade after 25. Returns an event for the
+ * announcer ('roadblock' / 'spikes') or null.
+ */
+export function updatePoliceTactics(tactics, game, dt) {
+  for (let i = tactics.spikeStrips.length - 1; i >= 0; i -= 1) {
+    tactics.spikeStrips[i].life -= dt;
+    if (tactics.spikeStrips[i].life <= 0) tactics.spikeStrips.splice(i, 1);
+  }
+  if (game.wanted.level === 0) {
+    if (tactics.roadblockCars.length > 0) clearRoadblock(tactics, game);
+    tactics.spikeStrips = [];
+    return null;
+  }
+  if (tactics.roadblockCars.length > 0) {
+    tactics.roadblockLife -= dt;
+    if (tactics.roadblockLife <= 0) {
+      clearRoadblock(tactics, game);
+      tactics.roadblockTimer = 40;
+    }
+  } else {
+    tactics.roadblockTimer -= dt;
+    if (tactics.roadblockTimer <= 0) {
+      tactics.roadblockTimer = 40;
+      if (formRoadblock(tactics, game)) return 'roadblock';
+    }
+  }
+  tactics.spikeTimer -= dt;
+  if (tactics.spikeTimer <= 0) {
+    tactics.spikeTimer = 18;
+    if (dropSpikeStrip(tactics, game)) return 'spikes';
+  }
+  return null;
+}
+
+/** Markers for the renderer: the live roadblock cars and spike strips. */
+export function policeTacticMarkers(tactics) {
+  const out = [];
+  for (const s of tactics.spikeStrips) {
+    out.push({ x: s.x, y: s.y, angle: s.angle, kind: 'spikes', label: 'Spike strip — slow down!' });
+  }
+  return out;
 }

@@ -145,6 +145,106 @@ export function knockPedDown(ped) {
   return true;
 }
 
+// ------------------------------------------------- v4 pedestrian types
+
+/** A race fan at the start line: waits, waves a checkered flag, cheers when a
+ * car roars past. They never stroll off — the race needs a crowd. */
+export function createRacerPed(x, y) {
+  const ped = createPed(Math.random, x, y);
+  ped.waiting = true;
+  ped.racer = true;
+  ped.tx = x;
+  ped.ty = y;
+  ped.shirt = '#e8b13c';
+  return ped;
+}
+
+/** A gang member in the rough districts (East Docks, South Market): dark
+ * clothes, slow stroll, and — unlike the crowd — they do not run from a
+ * gunshot. They watch. The renderer draws their dark jacket and cap. */
+export function createGangPed(x, y) {
+  const ped = createPed(Math.random, x, y);
+  ped.gang = true;
+  ped.shirt = '#2a2a34';
+  ped.skin = '#c98d5f';
+  ped.speed = PED_WALK_SPEED * 0.6;
+  return ped;
+}
+
+/** A paramedic at the hospital door: white uniform, waits for the next call. */
+export function createParamedicPed(x, y) {
+  const ped = createPed(Math.random, x, y);
+  ped.waiting = true;
+  ped.paramedic = true;
+  ped.tx = x;
+  ped.ty = y;
+  ped.shirt = '#f0f0f0';
+  return ped;
+}
+
+/** Ada Ruiz, the lawyer: North Marina, waiting for the evidence file. She
+ * never moves — mission 8's whole ending stands in one place. */
+export function createLawyerPed(x, y) {
+  const ped = createPed(Math.random, x, y);
+  ped.waiting = true;
+  ped.lawyer = true;
+  ped.tx = x;
+  ped.ty = y;
+  ped.shirt = '#6a4a8a';
+  ped.skin = '#f2c9a0';
+  return ped;
+}
+
+/**
+ * One gang member's step: a slow stroll, and no panic — a gunshot or a crash
+ * does not send them running. They pick a new stroll target when they arrive,
+ * and they never leave their own district's streets.
+ */
+export function updateGangPed(ped, dt, city, rng) {
+  if (ped.down > 0) {
+    ped.down -= dt;
+    return;
+  }
+  ped.walkPhase += dt * 7 * (ped.pace || 1);
+  ped.flee = 0; // gang members do not run
+  const dx = ped.tx - ped.x;
+  const dy = ped.ty - ped.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 12) {
+    pickStrollTarget(ped, rng);
+    return;
+  }
+  ped.angle = Math.atan2(dy, dx);
+  ped.x += (dx / d) * ped.speed * dt;
+  ped.y += (dy / d) * ped.speed * dt;
+  resolveCircle(city, ped, PED_RADIUS);
+}
+
+/**
+ * The v4 crowd, spawned with the city: race fans at the start line, gang
+ * members in the docks and the market, a paramedic at the hospital door, and
+ * the lawyer in North Marina. They join the normal crowd — the city does not
+ * keep its people in separate lists.
+ */
+export function spawnSpecialPeds(rng, city) {
+  const peds = [];
+  // Race fans along the start line on avenue 2200.
+  for (const [x, y] of [[2140, 2760], [2260, 2760], [2140, 2860], [2260, 2860]]) {
+    peds.push(createRacerPed(x, y));
+  }
+  // Gang members: the docks and the market, two each.
+  for (const [x, y] of [[4300, 2400], [4400, 2700], [800, 2400], [1100, 2800]]) {
+    const g = createGangPed(x, y);
+    pickStrollTarget(g, rng);
+    peds.push(g);
+  }
+  // A paramedic at the hospital door.
+  peds.push(createParamedicPed(city.hospitalDoor.x - 40, city.hospitalDoor.y));
+  // The lawyer, waiting in North Marina.
+  peds.push(createLawyerPed(city.lawyerSpot.x + 30, city.lawyerSpot.y + 30));
+  return peds;
+}
+
 /** Scare every pedestrian near a point (a gunshot, a crash). */
 export function scarePeds(peds, x, y, radius) {
   for (const ped of peds) {

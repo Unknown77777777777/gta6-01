@@ -1,7 +1,10 @@
-// The story of Costa Sol and its six missions. Lena Cruz, getaway driver, owes
-// Marco Venn two thousand dollars. Six jobs, in order, pay it off — each one a
-// list of objectives the game walks through: go somewhere, pick something up,
-// steal a car, lose the heat, hold still while the till opens, and run for the boat.
+// The story of Costa Sol and its nine missions. Lena Cruz, getaway driver,
+// owes Marco Venn two thousand dollars. Six jobs, in order, pay it off — each
+// one a list of objectives the game walks through: go somewhere, pick something
+// up, steal a car, lose the heat, hold still while the till opens, and run for
+// the boat. Then three more jobs finish the story: steal the getaway van,
+// survive a five-star lockdown with the evidence, and run Marco Venn himself
+// off the road — The Costa Sol Job (missions2.js).
 //
 // An objective is { type, x, y, r, text, time?, hold?, needCar? }:
 //   goto     reach the marker (on foot or in a car)
@@ -11,8 +14,12 @@
 //   rob      stand in the store and hold E until the hold timer fills
 //   escape   get the wanted level to zero (anywhere, or at the hideout)
 //   reach    reach the marker while the heat is on (the final run)
+//   stealvan steal the getaway van (mission 7; see missions2.js)
+//   ram      ram Marco's sedan until it stops (mission 9)
+//   final    on foot, press E at the stopped sedan (mission 9)
 
 import { dist } from './city.js';
+import { MISSIONS2 } from './missions2.js';
 
 export const DEBT_TOTAL = 2000;
 
@@ -84,7 +91,7 @@ export const MISSIONS = [
 
 export function createMissionState() {
   return {
-    index: 0, // which mission of MISSIONS
+    index: 0, // which mission of ALL_MISSIONS
     objective: 0, // which objective inside it
     timer: 0, // seconds left on a timed objective (0 = untimed)
     holdProgress: 0, // 0..1 while holding E on a rob objective
@@ -96,8 +103,55 @@ export function createMissionState() {
   };
 }
 
+/** The whole story, missions 1-9: the six debt jobs, then the three jobs of
+ * The Costa Sol Job (missions2.js). One list, so the stepper, the debt ledger
+ * and the HUD never disagree about how many jobs there are. */
+export const ALL_MISSIONS = MISSIONS.concat(MISSIONS2);
+
+/** How many missions the story holds (9 from v4 on). */
+export function missionCount() {
+  return ALL_MISSIONS.length;
+}
+
+/** The mission object for an index 0..8, or null past the end. */
+export function missionAt(index) {
+  return ALL_MISSIONS[index] || null;
+}
+
+/** The index of a mission id ('fare'..'king'), or -1. */
+export function missionIndexOf(id) {
+  for (let i = 0; i < ALL_MISSIONS.length; i += 1) {
+    if (ALL_MISSIONS[i].id === id) return i;
+  }
+  return -1;
+}
+
+/** Story progress as { done, total, pct }: the HUD's 9-job meter. */
+export function missionProgress(state) {
+  const done = state.done ? ALL_MISSIONS.length : state.index;
+  return { done, total: ALL_MISSIONS.length, pct: Math.round((done / ALL_MISSIONS.length) * 100) };
+}
+
+/** True when all nine missions are finished and the story is complete. */
+export function allMissionsComplete(state) {
+  return !!state.done;
+}
+
+/** Every reward in the story, added up: $4300 across nine jobs. */
+export function totalStoryReward() {
+  let sum = 0;
+  for (const m of ALL_MISSIONS) sum += m.reward;
+  return sum;
+}
+
+/** Money still owed on the $2000 debt, counting late-mission rewards too: a
+ * job done after the debt is paid still counts toward the ledger. */
+export function debtLeftAll(state) {
+  return Math.max(0, DEBT_TOTAL - moneyEarned(state));
+}
+
 export function currentMission(state) {
-  return state.done ? null : MISSIONS[state.index];
+  return state.done ? null : ALL_MISSIONS[state.index];
 }
 
 export function currentObjective(state) {
@@ -127,7 +181,7 @@ function advance(state) {
     state.banner = 4;
     if (!state.completedIds.includes(mission.id)) state.completedIds.push(mission.id);
     state.index += 1;
-    if (state.index >= MISSIONS.length) {
+    if (state.index >= ALL_MISSIONS.length) {
       state.done = true;
       state.objective = 0;
     } else {
@@ -187,6 +241,33 @@ export function updateMission(state, game, dt) {
     }
     case 'heat': {
       if (game.wanted.level >= 2) return advance(state);
+      break;
+    }
+    case 'stealvan': {
+      // Mission 7: the getaway van is taken when missions2 saw Lena climb
+      // into it (tryEnterCar sets vanStolen on the van).
+      if (game.missions2 && game.missions2.vanStolen) {
+        game.missions2.vanStolen = false;
+        return advance(state);
+      }
+      break;
+    }
+    case 'ram': {
+      // Mission 9: Marco's sedan stops when its health hits zero — the ram
+      // damage itself is applied by missions2.js each frame.
+      const m2 = game.missions2;
+      if (m2 && (m2.fleeStopped || (m2.fleeCar && m2.fleeCar.health <= 0))) {
+        return advance(state);
+      }
+      break;
+    }
+    case 'final': {
+      // Mission 9, last step: on foot, at the stopped sedan, press E. In a
+      // car it never completes — the story ends on foot, face to face.
+      if (player.onFoot && dist(player.x, player.y, obj.x, obj.y) < obj.r && game.interactPressed) {
+        game.interactPressed = false;
+        return advance(state);
+      }
       break;
     }
     case 'escape': {
@@ -255,7 +336,7 @@ export function missionTargetFor(state, game) {
 /** Money earned so far, for the debt meter. */
 export function moneyEarned(state) {
   let sum = 0;
-  for (let i = 0; i < state.index && i < MISSIONS.length; i += 1) sum += MISSIONS[i].reward;
+  for (let i = 0; i < state.index && i < ALL_MISSIONS.length; i += 1) sum += ALL_MISSIONS[i].reward;
   return sum;
 }
 
@@ -294,7 +375,7 @@ export function missionSummary(state) {
  * next" line when a mission pays out. Null when the story is finished.
  */
 export function nextMissionPreview(state) {
-  const next = state.done ? null : MISSIONS[state.index + 1];
+  const next = state.done ? null : ALL_MISSIONS[state.index + 1];
   if (!next) return null;
   return { title: next.title, reward: next.reward, briefing: next.briefing };
 }
@@ -309,6 +390,6 @@ export function missionBriefing(state) {
  * duplicated NPCs, cars or timers — the anti-soft-lock reset after a fail or
  * a wasted/busted respawn. */
 export function resetMissionClean(state) {
-  const idx = state.done ? MISSIONS.length - 1 : state.index;
-  startMission(state, Math.min(idx, MISSIONS.length - 1));
+  const idx = state.done ? ALL_MISSIONS.length - 1 : state.index;
+  startMission(state, Math.min(idx, ALL_MISSIONS.length - 1));
 }
