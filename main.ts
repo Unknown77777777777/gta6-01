@@ -4,10 +4,12 @@
 // only — no build step, no install, no network. The copy is whole and exact:
 // every file under game/ (the 2.5D edition: procedural textures, lighting,
 // radio, vehicle classes; v3 adds the baked static tile layer, the particle
-// pool, and the taxi/package/jump side work) and every screenshot under
-// screenshots/ lands in /output unchanged, so the dossier the scorer rebuilds
-// matches byte for byte. Before copying, a pre-flight check refuses to hand
-// in when a required source file or screenshot is missing, naming it.
+// pool, and the taxi/package/jump side work; v4 adds the day-night cycle,
+// districts, weapons, minigames, cutscene dialogues and missions 7-9) and
+// every screenshot under screenshots/ lands in /output unchanged, so the
+// dossier the scorer rebuilds matches byte for byte. Before copying, a
+// pre-flight check refuses to hand in when a required source file or
+// screenshot is missing, naming it.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
@@ -22,7 +24,7 @@ const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
 /** Build version, stamped into the hand-in log (never into the dossier, so
  * two runs still write byte-identical output). */
-const BUILD_VERSION = '3.0.0-costa-sol-v3';
+const BUILD_VERSION = '4.0.0-costa-sol-v4';
 
 /**
  * Pre-flight validation: every file the entry needs must exist before
@@ -45,6 +47,12 @@ const REQUIRED_FILES = [
   'game/src/render.js',
   'game/src/particles.js',
   'game/src/side.js',
+  'game/src/weapons.js',
+  'game/src/daynight.js',
+  'game/src/districts.js',
+  'game/src/cutscenes.js',
+  'game/src/minigames.js',
+  'game/src/missions2.js',
 ];
 const missing = REQUIRED_FILES.filter((rel) => {
   const p = join(here, rel);
